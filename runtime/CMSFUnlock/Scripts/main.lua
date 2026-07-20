@@ -6,70 +6,111 @@
 -- base one until you die in a raid, at which point the game randomly reassigns you.
 --
 -- The mechanism is a single bool on WBP_SkinSelection, SelectLockedSkinsOnly, which decides
--- whether the widget calls the component's GetUnlockedSkins (entitled only) or
--- GetAvailableSkins (everything). Measured live: 2 entries vs 7. Clearing it and rebuilding
--- gives the full list — including any skin CMSF appended to the roster.
+-- whether the widget calls GetUnlockedSkins (entitled only) or GetAvailableSkins
+-- (everything). Measured live: 2 entries vs 7. Clearing it and rebuilding gives the full
+-- list — including any skin CMSF appended to the roster.
 --
--- So this mod is what makes CMSF-added skins reachable. It is also worth having on its own:
--- it fixes the base-skins-are-unreachable annoyance even with no custom skins installed.
+-- v0.1.1 — THE BUG THAT MADE v0.1 DO NOTHING
+-- v0.1 called its enforcement directly from LoopAsync. LoopAsync runs on its own thread,
+-- and UObject property writes / UFunction calls made off the game thread do not reliably
+-- take — the mod loaded, logged, and silently changed nothing. The manual command that had
+-- worked during development wrapped the same code in ExecuteInGameThread; that wrapper was
+-- lost when this was packaged from the probe, and the polled path was never verified
+-- in-game before release.
 --
--- WHY IT IS WRITTEN THIS CONSERVATIVELY
--- An earlier version crashed the client (EXCEPTION_ACCESS_VIOLATION, stack inside
--- UE4SS.dll) by calling the native SetNewSkin with a wrongly-typed object, and another
--- version caused frame drops by hooking GetAvailableSkins, which the selector queries
--- across four ready-room player panels.
+-- RULE: every line that touches a UObject runs inside ExecuteInGameThread. No exceptions.
 --
--- The rules that came out of that, and that this file obeys:
+-- SAFETY RULES (each learned by breaking something)
 --   * Never invoke a native UFunction taking an object or struct parameter. `pcall` does
 --     NOT protect against a C++ access violation — it catches Lua errors only, and the
---     process is gone before Lua ever sees the fault.
---   * Never hook a per-frame function.
---   * Writing a PLAIN property (a bool) and calling a NO-ARGUMENT UFunction the game calls
---     constantly are both safe: neither can type-confuse a native call.
---
--- Everything below is one bool write plus Init(), which is the exact operation observed
--- working in testing.
+--     process is gone before Lua sees the fault. Passing LoadAsset's result to SetNewSkin
+--     crashed the client outright.
+--   * Never hook a per-frame function. A post-hook on GetAvailableSkins, which the selector
+--     queries across four ready-room panels, caused visible frame drops.
+--   * A plain bool write plus a NO-ARGUMENT UFunction call is safe: neither can
+--     type-confuse a native call. That is all this file does.
 
 local WIDGET = "WBP_SkinSelection_C"
 local POLL_MS = 1000
 
 local enabled = true
-local reported = 0
+local quiet = false          -- set once the first successful apply has been reported
 
 local function log(s) print("[CMSFUnlock] " .. tostring(s) .. "\n") end
 
-local function enforce()
-    if not enabled then return end
+-- Returns applied, seen. MUST be called on the game thread.
+local function apply(verbose)
     local found = FindAllOf(WIDGET)
-    if not found then return end
+    if not found then
+        if verbose then log("no skin selector in memory — open the skin menu first") end
+        return 0, 0
+    end
+
+    local applied, seen = 0, 0
     for _, w in pairs(found) do
         if w:IsValid() then
-            local locked = false
-            local ok = pcall(function() locked = w.SelectLockedSkinsOnly end)
-            -- Only act when the flag has actually come back true, i.e. once per menu
-            -- build. Without this check the list would be rebuilt every tick.
-            if ok and locked == true then
+            seen = seen + 1
+            local locked, readOk = nil, false
+            readOk = pcall(function() locked = w.SelectLockedSkinsOnly end)
+
+            -- Act when it is filtered, and also when the flag cannot be read — being
+            -- permissive here is harmless (clearing an already-clear flag is a no-op) and
+            -- avoids the failure mode where an unreadable property silently disables the
+            -- whole mod, which is close to what v0.1 did.
+            if (not readOk) or locked ~= false then
                 pcall(function() w.SelectLockedSkinsOnly = false end)
                 pcall(function() w:Init() end)
-                if reported < 3 then
-                    reported = reported + 1
-                    log("selector unfiltered")
+                applied = applied + 1
+
+                if verbose then
+                    -- Report the rebuilt list size: it distinguishes "the unlock worked"
+                    -- from "the CMSF pak did not load". Vanilla Scav Girl unfiltered is 7;
+                    -- more than that means appended skins are present too.
+                    local n = -1
+                    pcall(function()
+                        local kids = w.SkinOptions:GetAllChildren()
+                        n = kids and #kids or -1
+                    end)
+                    log(string.format("unfiltered a selector — it now lists %d skin(s)", n))
                 end
             end
         end
     end
+    if verbose and seen > 0 and applied == 0 then
+        log(string.format("%d selector(s) already unfiltered", seen))
+    end
+    return applied, seen
 end
 
 LoopAsync(POLL_MS, function()
-    pcall(enforce)
+    if enabled then
+        -- The wrapper that v0.1 was missing.
+        ExecuteInGameThread(function()
+            local applied = apply(false)
+            if applied > 0 and not quiet then
+                quiet = true
+                log("selector unfiltered (will keep it that way)")
+            end
+        end)
+    end
     return false      -- never stop
 end)
 
+-- Applies immediately AND reports, so running it always does something visible. v0.1 made
+-- this a bare toggle, which looked broken because it produced no effect on its own.
 RegisterConsoleCommandHandler("cmsfunlock", function()
-    enabled = not enabled
-    log(enabled and "ON — selector will list every skin"
-                or "OFF — vanilla behaviour (DLC skins only)")
+    enabled = true
+    ExecuteInGameThread(function()
+        local applied, seen = apply(true)
+        log(string.format("apply: %d changed / %d selector(s) found", applied, seen))
+    end)
     return true
 end)
 
-log("loaded — selector will list every skin for the character. Toggle with `cmsfunlock`.")
+RegisterConsoleCommandHandler("cmsfoff", function()
+    enabled = false
+    log("OFF — vanilla behaviour (DLC skins only) until `cmsfunlock`")
+    return true
+end)
+
+log("loaded — selector will list every skin. `cmsfunlock` to force + report, `cmsfoff` to disable.")
