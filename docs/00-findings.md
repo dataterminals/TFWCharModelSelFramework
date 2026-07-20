@@ -305,6 +305,35 @@ by the same reflection that `FWStealth` already uses on this game — **no nativ
 `AddDataTableRow` primitive is required**, and the TFWWorkbench dependency (with its `-894`
 ABI pin and unrebuildable `main.dll`) drops out of the design entirely.
 
+### How the two halves join — **[VERIFIED in-game 2026-07-20]**
+
+The roster test repointed `SkinChoices[4]` from `SK_SCV_FL4` to `SK_SCV_FL_OCT` and shipped
+two `DT_SkinUIData` rows (`ScavGirl5`, `CMSF.Girl.TEST`) both pointing at that same mesh.
+Result, with the filter cleared:
+
+- **Both** rows appeared, as separate entries, with their own names and descriptions
+  ("OCTOBER" / "OCTOBER (CMSF)").
+- **`ScavGirl4` disappeared** — its mesh is no longer in the roster.
+- Total **8** = 4 surviving base + 2 owned locked + 2 October.
+
+So the selector **iterates `DT_SkinUIData` rows and shows a row when its `Skin` mesh path is
+present in the character's roster arrays** — not the other way round. Three consequences:
+
+1. **A skin needs both halves.** Mesh in `SkinChoices`/`LockedSkinChoices` (availability) *and*
+   a table row pointing at it (identity: name, description, icon). Neither alone shows up.
+2. **Row names are free.** `CMSF.Girl.TEST` rendered correctly, so CMSF can live in a
+   `CMSF.*` namespace with no risk of colliding with official row names. This settles the
+   naming question in [02-poc.md](02-poc.md) §Naming — **distance from official names is
+   achievable**, contrary to the sequential-enumeration worry.
+3. **Many rows may share one mesh.** Two rows on the same mesh produced two distinct,
+   independently-named entries. So one shipped mesh can back several menu identities.
+
+`SkinName` and `SkinDetails` inline `FText` both rendered verbatim, confirming §2 — a mod
+supplies its own display strings with no string-table edit.
+
+The mesh itself turns out to be an **unfinished** cut skin (visibly incomplete texturing),
+which is presumably why it shipped unwired. Irrelevant to the mechanism.
+
 ### Loose end
 
 `DT_SkinUIData` contains `Skin.Girl.MAY` (mesh `Skins/MAY/SK_SCV_FL_May`), but
