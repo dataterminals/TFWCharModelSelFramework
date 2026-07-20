@@ -171,18 +171,52 @@ are the same key. 6 of the 7 dotted rows correspond exactly. The one exception:
 `DT_SkinUIData` has `Skin.Shaman.DSQ` while `DT_EntitlementTags` has `Skin.Shaman.Apr2026`
 — either a rename mid-development or a genuine mismatch.
 
-### The consequence that matters
+### ~~The consequence that matters~~ — RETRACTED 2026-07-20
 
 **Every `<Character><N>` base row has no entitlement counterpart at all.** `ScavGirl0`–`4`,
 `Bagman0`–`3`, `MaskMan0`–`2`, `OldMan0`–`1`, `Shaman0` appear in `DT_SkinUIData` and
-nowhere in either entitlement table — and they are the free, always-available skins.
+nowhere in either entitlement table. **[VERIFIED — this part still holds.]**
 
-So: **a row with no matching entitlement tag is ungated.** [INFERRED, but strongly
-supported.] An appended CMSF row deliberately named outside the entitlement namespace
-should therefore be free and unlocked, with no ownership check to defeat.
+What was wrong was the conclusion drawn from it. This doc previously claimed:
 
-This is the difference between CMSF and every existing skin mod, which requires the user to
-*own* the DLC slot being overwritten.
+> ~~a row with no matching entitlement tag is ungated … free and unlocked, with no
+> ownership check to defeat~~
+
+**That is backwards, and it is why the first PoC run showed nothing.**
+
+### What actually happens **[OBSERVED in-game, 2026-07-20]**
+
+The skin selector **only ever offers entitlement-gated DLC skins.** The shipped base skins
+are *not selectable there at all*. Concretely, as played:
+
+- The skin menu for a character lists **only the DLC skins**, not `ScavGirl0`–`4`.
+- Once a DLC skin is picked there is **no way back** to a base skin through the UI.
+- A base skin only reappears when you **die in a raid and respawn in the tunnels**, at
+  which point the game **randomly assigns** a skin — which may be a DLC skin or one of the
+  shipped base variants.
+
+So `DT_SkinUIData` feeds **two different consumers**:
+
+| Consumer | Rows it uses | Reachable how |
+|---|---|---|
+| Skin **selector** UI | entitlement-gated rows only | player picks |
+| Random respawn roll | base `<Char><N>` rows (and DLC) | assigned on tunnel respawn |
+
+Having no entitlement tag does not make a row free — it makes it **invisible to the
+selector**, leaving only the random pool. An appended row named in base convention lands in
+the pool nobody can choose from.
+
+This is corroborated by `WBP_SkinSelection`'s CDO property **`SelectLockedSkinsOnly: true`**
+(§6), which reads exactly as "keep only locked/entitled rows" — a filter that would reject
+an appended row regardless of what it is named.
+
+### What this costs the design
+
+Appending a row is necessary but **not sufficient**. To be *selectable*, a CMSF skin must
+additionally either (a) carry an entitlement the player actually owns, (b) run with the
+selector's filter disabled, or (c) be injected at the widget level. Only (a) is
+data-only — and it is the one that depends on platform ownership we cannot grant. See
+[01-design.md](01-design.md) §Post-PoC.
 
 ## 5. `SK_SCV_FL_OCT` — a complete, shipped, unreachable skin **[VERIFIED]**
 

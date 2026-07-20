@@ -126,6 +126,44 @@ This gets a working, composable, DLC-free, custom-portrait framework with **no r
 dependency at all**, and leaves the pretty-names problem to an optional component that
 cannot take the system down with it.
 
+## Post-PoC — the selector filter changes the calculus
+
+The first in-game run (2026-07-20) showed no new skin, and the reason is not the
+enumeration question this PoC was built to answer. It is that **the skin selector only
+offers entitlement-gated skins at all** — see [00-findings.md](00-findings.md) §4. Adding a
+row is necessary but not sufficient.
+
+Three ways forward, and the choice matters because two of them cost Vector A+ its main
+advantage:
+
+**(a) Grant an entitlement.** Add a row to `DT_EntitlementTags` (also a plain DataTable,
+RowStruct `GameplayTagTableRow`) matching the skin row's name. Data-only, so it would keep
+CMSF runtime-free. **But** whether the player *owns* the tag is presumably resolved against
+EOS/Steam, which a data table cannot fake. The `GIFT.*` rows
+(`GIFT.ThunderDome.ThiefSkin.Win` → `Entitlement.PlayerUpgrade.ThunderdomeWin`,
+`GIFT.Anniversary.Skin.Maskman`) prove some entitlements are granted by **in-game
+achievement**, not purchase — so a local grant path exists. Worth understanding before
+ruling this out, since it is the only option that preserves a no-dependency design.
+
+**(b) Disable the selector's filter.** `WBP_SkinSelection`'s CDO carries
+`SelectLockedSkinsOnly: true`. Clearing it may make the selector list every row for the
+character, appended ones included. Two ways to do it: a **static pak override of the widget
+Blueprint's CDO** (keeps CMSF runtime-free, but overriding a widget BP is far more
+patch-fragile than a DataTable), or **UE4SS at runtime** (easy and robust to asset changes,
+but reintroduces the runtime dependency). Being tested by `probe/` (`cmsfunlock`).
+
+**(c) Widget-level injection — Vector C.** Now considerably more attractive than when it
+was written as a fallback, because the selector must be touched *anyway* under (b).
+
+Note that (b) and (c) both need UE4SS, which removes "no runtime dependency" as a reason to
+prefer A+. If the filter cannot be cleared statically, the honest comparison is between
+"A+ plus a runtime filter patch" and "Vector B done properly" — and B is the better system
+if a runtime dependency is being paid for regardless.
+
+**Do not pick until the probe reports.** If the live table shows 35 rows, appending itself
+works and only the selector is in the way; if it shows 33, there is a deployment bug to fix
+first and none of this applies yet.
+
 ## Deferred / unresolved
 
 - **Pak load order.** Ordering is derived from the token between the last two underscores

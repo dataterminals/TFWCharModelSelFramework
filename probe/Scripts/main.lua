@@ -17,8 +17,18 @@
 -- params varies by build, so each call shape is tried in turn and the one that worked is
 -- logged — the same defensive style as TFWQuestItemTag's three-way FText fallback.
 
+-- SelectLockedSkinsOnly (a CDO property on WBP_SkinSelection_C, default TRUE) is the
+-- prime suspect for why appended rows never show. Sylvia reports the selector only ever
+-- offers entitlement-gated DLC skins — the shipped base skins are NOT selectable there,
+-- they only turn up via the random skin roll on respawn in the tunnels. That matches a
+-- filter that keeps "locked"/entitled rows and drops everything else, which would reject
+-- an appended row no matter what it is named. `cmsfunlock` flips it and rebuilds.
+
 local TABLE_PATH = "/Game/FW/Player/Data/DT_SkinUIData.DT_SkinUIData"
+local WIDGET_CLASS = "/Game/FW/UI/MainMenu/UMG/Panels/WBP_SkinSelection.WBP_SkinSelection_C"
 local WANT = { ["ScavGirl5"] = true, ["CMSF.Girl.TEST"] = true }
+
+local UNLOCK = false   -- set by `cmsfunlock`; applied on the next widget Init
 
 local function log(s) print("[CMSF] " .. tostring(s) .. "\n") end
 
@@ -121,6 +131,61 @@ local function probe()
     probeWidget()
     log("==== probe end ====")
 end
+
+-- Flip SelectLockedSkinsOnly on every live selector and force it to rebuild.
+-- Init is what populates SkinOptions, so the flag has to be false BEFORE it runs; setting
+-- it on an already-built widget does nothing until the list is regenerated.
+local function unlockLive()
+    local found = FindAllOf("WBP_SkinSelection_C")
+    if not found or #found == 0 then
+        log("UNLOCK: no live selector — open the skin menu first, then rerun `cmsfunlock`")
+        return
+    end
+    for _, w in pairs(found) do
+        if w:IsValid() then
+            local before = "?"
+            pcall(function() before = tostring(w.SelectLockedSkinsOnly) end)
+            local ok = pcall(function() w.SelectLockedSkinsOnly = false end)
+            local after = "?"
+            pcall(function() after = tostring(w.SelectLockedSkinsOnly) end)
+            log(string.format("UNLOCK: set ok=%s  %s -> %s", tostring(ok), before, after))
+            -- Rebuild. Init's signature is unknown, so try no-arg then give up loudly.
+            local rebuilt = pcall(function() w:Init() end)
+            log("UNLOCK: Init() rebuild " .. (rebuilt and "called" or "FAILED (needs args?) — reopen the menu instead"))
+        end
+    end
+    probeWidget()
+end
+
+-- The BP class is not in memory at script load, so RegisterHook would fail with "no
+-- UFunction with the specified name was found" (the TFWQuestItemTag lesson). Poll until
+-- the class exists, register once, then stop.
+local hooked = false
+LoopAsync(2000, function()
+    if hooked then return true end     -- true stops the loop
+    local cls = StaticFindObject(WIDGET_CLASS)
+    if not cls or not cls:IsValid() then return false end
+    local ok = pcall(function()
+        RegisterHook(WIDGET_CLASS .. ":Init", function(self)
+            if not UNLOCK then return end
+            pcall(function()
+                local w = self:get()
+                w.SelectLockedSkinsOnly = false
+                log("UNLOCK: pre-Init flag cleared on " .. w:GetFullName())
+            end)
+        end)
+    end)
+    hooked = ok
+    log("HOOK: WBP_SkinSelection_C:Init " .. (ok and "registered" or "registration failed"))
+    return ok
+end)
+
+RegisterConsoleCommandHandler("cmsfunlock", function()
+    UNLOCK = true
+    log("UNLOCK: armed — reopening the skin menu will rebuild it unfiltered")
+    ExecuteInGameThread(unlockLive)
+    return true
+end)
 
 RegisterConsoleCommandHandler("cmsfprobe", function()
     ExecuteInGameThread(probe)
