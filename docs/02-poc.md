@@ -73,7 +73,53 @@ Pleasant side effect: success un-cuts a finished skin the game shipped and never
 
    `_9_P` → `ChunkVersionNumber` 10 → order 1003, ahead of casual mods.
 
-4. Install the trio to `Content\Paks\Mods\`, with the signature bypass present.
+4. Install as an **MO2 mod** — not into the game directory. See §Environment.
+
+Steps 1–4 are automated by `tools/build_poc.sh`, which re-extracts from the live cook every
+run and fails loudly if a built pak does not read back with both rows.
+
+## Environment
+
+This machine runs the game through **Mod Organizer 2**, so the real game directory stays
+clean by design and is *not* where mods live. Checking
+`...\The Forever Winter\Windows\ForeverWinter\Content\Paks\` for a `Mods\` folder, or
+`Binaries\Win64\` for `dsound.dll`, shows nothing — Root Builder deploys those at launch and
+withdraws them afterwards. **A vanilla-looking game directory is the expected state, not
+evidence that anything is missing.**
+
+| | |
+|---|---|
+| MO2 instance | `C:\Users\sylvi\AppData\Local\ModOrganizer\The Forever Winter\` |
+| Mod store | `H:\MO2Instance_ModData\ForeverWinter\mods\` |
+| Profile | `Default` |
+| Game | `H:\SteamLibrary\steamapps\common\The Forever Winter` |
+
+A pak mod is staged as `mods\<Name>\Mods\<pak trio>` — the inner `Mods\` maps to
+`Content\Paks\Mods\`. The signature bypass uses Root Builder layout instead:
+`mods\Signature Bypass\Root\Windows\ForeverWinter\Binaries\Win64\{dsound.dll,bitfix\sig.lua}`.
+
+**Do not edit `profiles\Default\modlist.txt` while MO2 is running** — it is held in memory
+and rewritten on exit, which silently discards outside changes. Stage the mod folder, then
+refresh MO2 (F5) and enable it in the UI.
+
+### Bypass status — verified, not assumed
+
+`sig.lua` carries a hand-updated pattern (*"Original pattern updated for game version
+0.1.53312.0 — TEB access from wildcard `??` to fixed `58 00 00 00`"*). It **matches the
+currently installed build**: `bitfix.txt` receipts from 2026-07-16 record four consecutive
+launches ending `writing C3 to 7FF7D6770290`, on the same cook that is installed now
+(paks dated 2026-07-07, buildid `24097213`).
+
+### Conflict check — clean
+
+Extracting every pak across all installed MO2 mods yields 70 assets, and **none is
+`DT_SkinUIData`**. The four character-ish mods (Augmented Kane, Naughty Luca, Bunco-chan,
+Recruiter Slade) are NPC/vendor **portrait** swaps mounted under `MyProject2/`, not player
+skins. CMSF has sole ownership of the table.
+
+Note also that installed mods use three different mount roots — `ForeverWinter/`,
+`MyProject2/`, `BagmanTest/` (mod authors' project names). CMSF builds under
+`ForeverWinter/`, matching the game's own mount.
 
 ## Result matrix
 
@@ -121,9 +167,12 @@ This experiment decides which. Do not pick a slot-naming scheme before it runs.
 
 ## Before trusting any result
 
-- Confirm the bypass matched: `Binaries\Win64\bitfix.txt` should contain a
-  `writing C3 to <addr>` line. **No line means no pak mod loaded at all**, and the
-  experiment measured nothing.
-- Confirm no other mod in `Paks\Mods\` also overrides `DT_SkinUIData`.
-- Verify the row survived the repack by re-decoding the built pak, rather than assuming the
-  UAssetAPI write landed.
+- **Enable exactly one** of `CMSF PoC` / `CMSF PoC Fallback` — never both. They ship the
+  same asset and would fight over it.
+- Confirm the bypass matched **on this run**: `Binaries\Win64\bitfix.txt` should gain a
+  fresh `writing C3 to <addr>` line. **No new line means no pak mod loaded at all**, and
+  the experiment measured nothing. Under MO2 the file is written into the real game dir at
+  launch, so check it after the run, not before.
+- ~~Confirm no other mod also overrides `DT_SkinUIData`~~ — done, see §Conflict check.
+- ~~Verify the row survived the repack~~ — `build_poc.sh` does this automatically by
+  decoding the built pak back out and asserting both rows are present.

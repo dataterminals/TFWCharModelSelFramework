@@ -4,12 +4,18 @@
 
 | | |
 |---|---|
-| Game build | `24045295` |
+| Game build | `24097213` (Steam `buildid`; paks dated 2026-07-07) |
 | Engine | UE 5.4.2 |
 | Mappings | `ForeverWinter-5.4.2.usmap` |
 | Paks | `H:\SteamLibrary\steamapps\common\The Forever Winter\Windows\ForeverWinter\Content\Paks` |
 | Tool | `forever-winter-datamine` → `python -m fwdata get <name>` (prebuilt `fwextract.exe`) |
 | Files mounted | 76,589 |
+
+> Caveat: `fwdata` stamps its cache dir and catalogs from a **hardcoded** `GAME_BUILD` in
+> `fwdata/version.py`, which still reads `24045295` and was never bumped after the
+> 2026-07-07 patch. The dumps below were decoded from the live paks and are current for
+> `24097213`; only the cache label is stale. Also note `fwdata/paths.py` hardcodes a `D:`
+> paks path, so `FW_PAKS` must be exported on this machine.
 
 Reproduce with:
 
