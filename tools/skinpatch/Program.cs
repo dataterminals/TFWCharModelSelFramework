@@ -39,16 +39,39 @@ class Program
         var usmap = new Usmap(args[2]);
         var asset = new UAsset(args[1], EngineVersion.VER_UE5_4, usmap);
 
-        var tables = asset.Exports.OfType<DataTableExport>().ToList();
-        if (tables.Count == 0)
+        // Blueprint roster modes operate on a BlueprintGeneratedClass, which has no
+        // DataTableExport — so they must run before the DataTable lookup below.
+        bool isBpMode = mode == "bpskins" || mode == "bpset" || mode == "bpexports";
+
+        if (mode == "bpexports")
         {
-            Console.WriteLine("no DataTableExport found; exports were:");
-            foreach (var e in asset.Exports) Console.WriteLine($"  {e.GetType().Name}  {S(e.ObjectName)}");
-            return 2;
+            foreach (var e in asset.Exports)
+            {
+                string cls = e.ClassIndex != null && e.ClassIndex.IsImport()
+                    ? S(e.ClassIndex.ToImport(asset)?.ObjectName) : "?";
+                string props = e is NormalExport ne
+                    ? string.Join(", ", ne.Data.Select(p => S(p.Name)))
+                    : "(unparsed)";
+                Console.WriteLine($"  {e.GetType().Name,-16} {S(e.ObjectName),-52} class={cls}");
+                if (e is NormalExport && props.Length > 0) Console.WriteLine($"        [{props}]");
+            }
+            return 0;
         }
 
-        var dt = tables[0];
-        var rows = dt.Table.Data;
+        DataTableExport dt = null;
+        List<StructPropertyData> rows = null;
+        if (!isBpMode)
+        {
+            var tables = asset.Exports.OfType<DataTableExport>().ToList();
+            if (tables.Count == 0)
+            {
+                Console.WriteLine("no DataTableExport found; exports were:");
+                foreach (var e in asset.Exports) Console.WriteLine($"  {e.GetType().Name}  {S(e.ObjectName)}");
+                return 2;
+            }
+            dt = tables[0];
+            rows = dt.Table.Data;
+        }
 
         if (mode == "inspect")
         {
@@ -87,6 +110,72 @@ class Program
                     Console.WriteLine($"      #{fi.Name,-24} {fi.FieldType.Name,-22} = {Fmt(v)}");
                 }
             }
+            return 0;
+        }
+
+        // ---- Blueprint roster modes -------------------------------------------------
+        // The real skin roster is FWSkinChangeComponent.SkinChoices on BP_Player_<Char>,
+        // not DT_SkinUIData. These modes work on that array. `bpskins` lists it;
+        // `bpset` repoints one entry at another mesh, which is the minimal way to prove
+        // "roster array drives availability" without needing a TArray append.
+        if (mode == "bpskins" || mode == "bpset")
+        {
+            var comp = asset.Exports.OfType<NormalExport>()
+                .FirstOrDefault(e => e.Data.Any(p => S(p.Name) == "SkinChoices"));
+            if (comp == null)
+            {
+                Console.WriteLine("no export carrying SkinChoices; exports were:");
+                foreach (var e in asset.Exports.OfType<NormalExport>())
+                    Console.WriteLine($"  {S(e.ObjectName)}  [{string.Join(", ", e.Data.Select(p => S(p.Name)))}]");
+                return 2;
+            }
+            var arr = comp.Data.First(p => S(p.Name) == "SkinChoices") as ArrayPropertyData;
+            Console.WriteLine($"[{S(comp.ObjectName)}] SkinChoices = {arr.Value.Length}");
+            for (int i = 0; i < arr.Value.Length; i++)
+                Console.WriteLine($"  [{i}] {Describe(arr.Value[i])}");
+
+            if (mode == "bpskins") return 0;
+
+            // bpset <in> <usmap> <out> <index> <"/Package/Path.Object">
+            if (args.Length < 6) { Console.WriteLine("usage: skinpatch bpset <in> <usmap> <out> <index> <path>"); return 1; }
+            var outPath2 = args[3];
+            int idx = int.Parse(args[4]);
+            string full = args[5];
+            if (idx < 0 || idx >= arr.Value.Length) { Console.WriteLine($"index {idx} out of range"); return 1; }
+
+            int dot2 = full.LastIndexOf('.');
+            string pkg2 = full.Substring(0, dot2), obj2 = full.Substring(dot2 + 1);
+
+            var target = arr.Value[idx];
+            bool wrote = false;
+            if (target is SoftObjectPropertyData sop)
+            {
+                sop.Value = new FSoftObjectPath(
+                    new FTopLevelAssetPath(FName.FromString(asset, pkg2), FName.FromString(asset, obj2)),
+                    FString.FromString(""));
+                wrote = true;
+            }
+            else if (target is StructPropertyData sp)
+            {
+                // FSoftObjectPath serialised as a struct: rewrite its inner soft path.
+                var inner = sp.Value.OfType<SoftObjectPropertyData>().FirstOrDefault();
+                if (inner != null)
+                {
+                    inner.Value = new FSoftObjectPath(
+                        new FTopLevelAssetPath(FName.FromString(asset, pkg2), FName.FromString(asset, obj2)),
+                        FString.FromString(""));
+                    wrote = true;
+                }
+            }
+            if (!wrote)
+            {
+                Console.WriteLine($"ABORT: unhandled element type {target.GetType().Name} — inspect with bpskins first");
+                return 3;
+            }
+
+            Console.WriteLine($"  set [{idx}] -> {full}");
+            asset.Write(outPath2);
+            Console.WriteLine($"wrote {outPath2}");
             return 0;
         }
 
@@ -178,6 +267,20 @@ class Program
 
         Console.WriteLine($"unknown mode: {mode}");
         return 1;
+    }
+
+    // Render an array element readably regardless of how the soft path is serialised.
+    static string Describe(PropertyData p)
+    {
+        if (p is SoftObjectPropertyData s) return $"SoftObject  {s.Value}";
+        if (p is ObjectPropertyData o) return $"Object      {o.Value?.Index}";
+        if (p is StructPropertyData st)
+        {
+            var inner = st.Value.OfType<SoftObjectPropertyData>().FirstOrDefault();
+            if (inner != null) return $"Struct<{S(st.StructType)}>  {inner.Value}";
+            return $"Struct<{S(st.StructType)}>  [{string.Join(", ", st.Value.Select(x => S(x.Name) + ":" + x.GetType().Name))}]";
+        }
+        return p.GetType().Name;
     }
 
     // Deterministic 32-char uppercase hex key, so rebuilds are byte-stable.
