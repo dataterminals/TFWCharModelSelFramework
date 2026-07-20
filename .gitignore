@@ -17,3 +17,6 @@ obj/
 
 __pycache__/
 *.pyc
+
+# published tool output (rebuild with: dotnet publish tools/cmsf -c Release -o dist/cmsf-tool)
+dist/cmsf-tool/
