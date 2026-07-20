@@ -126,7 +126,44 @@ This gets a working, composable, DLC-free, custom-portrait framework with **no r
 dependency at all**, and leaves the pretty-names problem to an optional component that
 cannot take the system down with it.
 
-## REVISION 2026-07-20 — the target moved
+## DECISION 2026-07-20 — ship static + a safe runtime unlock
+
+The pure-runtime design is **not worth pursuing further**, on evidence rather than taste.
+
+`FWSkinChangeComponent` does expose the right-looking API (`GetAvailableSkins`,
+`SetNewSkin`, …), but every route to *writing* the roster from Lua has failed, and the last
+attempt **crashed the client** — `EXCEPTION_ACCESS_VIOLATION` reading `0x70`, stack entirely
+inside `UE4SS.dll`. Cause: `SetNewSkin` takes an object parameter, and it was handed
+whatever `LoadAsset` returned (most likely a `UPackage`, not the `USkeletalMesh`); the
+native side dereferenced it as a mesh.
+
+**The lesson worth keeping: `pcall` does not make native calls safe.** It catches Lua
+errors. It cannot catch a C++ access violation — the process is gone before Lua sees
+anything. Wrapping a native call in `pcall` and calling it defensive is a false comfort,
+and it is what turned a bad guess into a crash instead of an error message.
+
+Related: `TSoftObjectPtrUserdata` exposes no usable accessor from Lua (`getmetatable`
+returns nil despite `:type()` working; `GetPathName`/`ToString`/`Get` all error), so roster
+elements can be read as opaque handles and nothing more.
+
+### What ships instead
+
+| Layer | Mechanism | Status |
+|---|---|---|
+| Roster | static pak, `SkinChoices` on `BP_Player_<Char>` via `skinpatch bpset` | **proven in-game** |
+| Identity | static pak, appended `DT_SkinUIData` rows | **proven in-game** |
+| Selector filter | UE4SS Lua, poll + clear `SelectLockedSkinsOnly` + `Init()` | **proven** (`cmsfunlock`), now automated |
+
+Every operation here is one we have actually observed working. The filter step writes only a
+**bool** and calls a **no-argument** UFunction the game itself calls constantly — neither can
+type-confuse a native call, which is precisely what the crash came from.
+
+The costs are the ones the reserved-slot-pool design was built to absorb: CMSF owns
+`DT_SkinUIData` and the six `BP_Player_*` assets, so it must be rebased each game patch, and
+skin mods claim slots rather than registering freely. Accepted, in exchange for a framework
+that does not risk the player's client.
+
+## Superseded — REVISION 2026-07-20, the target moved
 
 Everything above targets `DT_SkinUIData`. **That was the wrong asset.** The PoC proved it:
 our two rows reached the live table (35 rows confirmed at runtime) and the selector still
