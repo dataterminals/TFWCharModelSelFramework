@@ -334,6 +334,43 @@ supplies its own display strings with no string-table edit.
 The mesh itself turns out to be an **unfinished** cut skin (visibly incomplete texturing),
 which is presumably why it shipped unwired. Irrelevant to the mechanism.
 
+### `FWSkinChangeComponent`'s API **[VERIFIED at runtime 2026-07-20]**
+
+Reflected off a live instance (`/Script/FWGameCore.FWSkinChangeComponent`, superclass
+`ActorComponent`):
+
+```
+fn   SetSelectedSkin        fn   GetUnlockedSkins      fn   OnRep_UpdateSkin
+fn   SetNewSkin             fn   GetAvailableSkins     fn   OnDeath
+fn   ForceUpdateSkin
+
+prop SkinChoices            ArrayProperty
+prop LockedSkinChoices      MapProperty
+prop SaveGame               ObjectProperty
+prop SelectedSkin           ObjectProperty
+prop OnChangedSkin          MulticastInlineDelegateProperty
+```
+
+This is the decisive result for the architecture. `GetAvailableSkins` is the natural feed
+for the selector, so **hooking it and returning an augmented list would require no pak
+override at all** — no `BP_Player_*` ownership, no composability limit, no per-patch rebase.
+`SetNewSkin` / `ForceUpdateSkin` give a direct apply path, and `OnDeath` is presumably the
+random reassignment on tunnel respawn.
+
+`SaveGame` being an `ObjectProperty` on the component is where skin persistence lives —
+relevant to whether an appended skin survives a session.
+
+### Lua access to the roster — why four write attempts failed
+
+`SkinChoices` elements are **`TSoftObjectPtrUserdata`**, UE4SS's wrapper type. Its `__index`
+falls through such that `elem.AssetPath`, `elem.AssetPathName` and `elem.SubPathString` all
+return **the element itself**, and `:GetFullName()` / `:get()` / `:ForEachProperty()` all
+error with *"attempt to call a TSoftObjectPtrUserdata value"*.
+
+So the earlier writes did not fail because the approach was wrong — they failed because the
+accessors were guessed. The metatable is enumerable from Lua (`getmetatable`), which is the
+correct way to discover the real method set rather than guessing a fifth time.
+
 ### Loose end
 
 `DT_SkinUIData` contains `Skin.Girl.MAY` (mesh `Skins/MAY/SK_SCV_FL_May`), but

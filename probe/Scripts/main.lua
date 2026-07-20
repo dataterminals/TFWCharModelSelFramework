@@ -414,6 +414,79 @@ local function dumpElem()
     end)
 end
 
+-- FWSkinChangeComponent's real API (from cmsfdump):
+--     GetAvailableSkins  GetUnlockedSkins  SetSelectedSkin  SetNewSkin  ForceUpdateSkin
+--     OnRep_UpdateSkin   OnDeath
+--     SkinChoices[Array] LockedSkinChoices[Map] SelectedSkin[Object] SaveGame[Object]
+--
+-- GetAvailableSkins is the likely feed for the selector, so hooking it and returning an
+-- augmented list would need no pak override at all. Before that: elements are
+-- TSoftObjectPtrUserdata, and every attribute guess returned the object itself (UE4SS's
+-- __index falls through), which is why four separate write attempts failed silently.
+-- Enumerate the metatable instead of guessing a fifth time.
+local function dumpMeta(label, v)
+    log(string.format("META: %s  type=%s", label, type(v)))
+    local ok, mt = pcall(getmetatable, v)
+    if not ok or not mt then log("META:   (no metatable)") return end
+    local shown = 0
+    for k, mv in pairs(mt) do
+        log(string.format("META:   mt.%-16s %s", tostring(k), type(mv)))
+        shown = shown + 1
+        if shown > 40 then log("META:   ...") break end
+    end
+    if type(mt.__index) == "table" then
+        local n = 0
+        for k, mv in pairs(mt.__index) do
+            log(string.format("META:   .%-24s %s", tostring(k), type(mv)))
+            n = n + 1
+            if n > 60 then log("META:   ...(truncated)") break end
+        end
+        if n == 0 then log("META:   __index table is empty") end
+    elseif mt.__index ~= nil then
+        log("META:   __index is a " .. type(mt.__index) .. " (not enumerable)")
+    end
+end
+
+local function probeApi()
+    local c = findSkinComp()
+    if not c then log("API: no live FWSkinChangeComponent — be in the hub/a raid") return end
+    log("API: " .. c:GetFullName())
+
+    -- The two getters: what do they return, and in what shape?
+    for _, fn in ipairs({ "GetAvailableSkins", "GetUnlockedSkins" }) do
+        local ok, res = pcall(function() return c[fn](c) end)
+        if not ok then
+            log(string.format("API: %s ! %s", fn, tostring(res):sub(1, 100)))
+        else
+            log(string.format("API: %s -> type=%s", fn, type(res)))
+            pcall(function() log(string.format("API:   #=%d", #res)) end)
+            if res ~= nil and type(res) ~= "number" then dumpMeta(fn .. "()", res) end
+        end
+    end
+
+    -- The array itself, and one element.
+    local arr
+    if pcall(function() arr = c.SkinChoices end) and arr then
+        dumpMeta("SkinChoices", arr)
+        local e
+        if pcall(function() e = arr[1] end) and e then
+            dumpMeta("SkinChoices[1]", e)
+            -- Most likely readers on a TSoftObjectPtr wrapper.
+            for _, m in ipairs({ "GetPathName", "ToString", "GetAssetName", "GetAssetPathString", "Get" }) do
+                local ok, v = pcall(function() return e[m](e) end)
+                log(string.format("API:   elem:%-20s %s", m, ok and tostring(v) or "!"))
+            end
+        end
+    end
+
+    pcall(function() dumpMeta("SelectedSkin", c.SelectedSkin) end)
+end
+
+RegisterConsoleCommandHandler("cmsfapi", function()
+    ExecuteInGameThread(probeApi)
+    return true
+end)
+
 RegisterConsoleCommandHandler("cmsfdump", function(fullCmd, params)
     local cls = params and params[1]
     if not cls or cls == "" then
@@ -431,13 +504,22 @@ end)
 
 -- Auto-run the two that decide the architecture, so a launch is useful even without
 -- reaching the console (which the skin menu draws over anyway).
-ExecuteWithDelay(25000, function()
+-- The previous auto-run fired at a fixed 25s and found nothing, because the pawn (and so
+-- the component) does not exist that early. Poll instead, and fire once it is actually
+-- there — a fixed delay was measuring the loading screen.
+local autoDone = false
+LoopAsync(8000, function()
+    if autoDone then return true end
+    local c = findSkinComp()
+    if not c then return false end
+    autoDone = true
     ExecuteInGameThread(function()
         log("==== auto reflection dump ====")
         dumpClass("FWSkinChangeComponent")
-        dumpElem()
+        probeApi()
         log("==== auto reflection end ====")
     end)
+    return true
 end)
 
 RegisterConsoleCommandHandler("cmsfcomp", function()
