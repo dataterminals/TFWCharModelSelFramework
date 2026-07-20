@@ -319,6 +319,127 @@ local function addOct()
     log("ADD: now reopen the skin menu (run cmsfunlock first if you have not)")
 end
 
+-- ---------------------------------------------------------------------------------------
+-- Reflection dumper. Deciding static-vs-runtime hinges on whether FWSkinChangeComponent
+-- exposes a callable function for adding/changing a skin: if it does, the runtime design
+-- works and nothing needs pak-overriding. Written generically (dump any class by name)
+-- because every previous single-purpose probe cost a full game launch to learn one fact.
+--
+--   cmsfdump FWSkinChangeComponent
+--   cmsfdump WBP_SkinSelection_C
+--   cmsfdump WBP_PlayerStatusWidget_C
+--   cmsfelem                          deep introspection of one SkinChoices element
+
+local function try(label, fn)
+    local ok, res = pcall(fn)
+    if ok then
+        if res ~= nil then log(string.format("    %-28s = %s", label, tostring(res))) end
+        return true, res
+    end
+    log(string.format("    %-28s ! %s", label, tostring(res):sub(1, 90)))
+    return false, nil
+end
+
+local function dumpStruct(st, depth)
+    if not st or not st:IsValid() then return end
+    local name = "?"
+    pcall(function() name = st:GetFullName() end)
+    log("  CLASS: " .. name)
+
+    local nf = 0
+    local okF = pcall(function()
+        st:ForEachFunction(function(f)
+            nf = nf + 1
+            local fname = "?"
+            pcall(function() fname = f:GetFName():ToString() end)
+            log("    fn   " .. fname)
+        end)
+    end)
+    if not okF then log("    (ForEachFunction unavailable)") end
+    if okF and nf == 0 then log("    (no functions on this class)") end
+
+    local okP = pcall(function()
+        st:ForEachProperty(function(p)
+            local pname, ptype = "?", "?"
+            pcall(function() pname = p:GetFName():ToString() end)
+            pcall(function() ptype = p:GetClass():GetFName():ToString() end)
+            log(string.format("    prop %-32s %s", pname, ptype))
+        end)
+    end)
+    if not okP then log("    (ForEachProperty unavailable)") end
+
+    if depth <= 0 then return end
+    local super = nil
+    pcall(function() super = st:GetSuperStruct() end)
+    if super == nil then pcall(function() super = st:GetSuper() end) end
+    if super and super:IsValid() then dumpStruct(super, depth - 1) end
+end
+
+local function dumpClass(className)
+    local obj = FindFirstOf(className)
+    if not obj or not obj:IsValid() then
+        log("DUMP: no live instance of " .. className)
+        local cls = StaticFindObject("/Script/FWGameCore." .. className)
+        if cls and cls:IsValid() then log("DUMP: (class object exists though: " .. cls:GetFullName() .. ")") end
+        return
+    end
+    log("DUMP: instance " .. obj:GetFullName())
+    local cls = nil
+    pcall(function() cls = obj:GetClass() end)
+    dumpStruct(cls, 3)   -- walk a few supers; the useful function may be inherited
+end
+
+-- Everything about writing the roster from Lua failed with the accessors guessed so far.
+-- Rather than guess again, enumerate what an element actually responds to.
+local function dumpElem()
+    local c = findSkinComp()
+    if not c then log("ELEM: no live FWSkinChangeComponent") return end
+    local arr = nil
+    if not select(1, try("SkinChoices", function() arr = c.SkinChoices; return type(arr) end)) then return end
+    try("#SkinChoices", function() return #arr end)
+
+    local e = nil
+    if not select(1, try("elem[1] lua type", function() e = arr[1]; return type(e) end)) then return end
+
+    try("elem[1] tostring", function() return tostring(e) end)
+    try("elem[1]:type()", function() return e:type() end)
+    try("elem[1]:GetFullName()", function() return e:GetFullName() end)
+    try("elem[1]:get()", function() return tostring(e:get()) end)
+    try("elem[1].AssetPath", function() return tostring(e.AssetPath) end)
+    try("elem[1].AssetPathName", function() return tostring(e.AssetPathName) end)
+    try("elem[1].SubPathString", function() return tostring(e.SubPathString) end)
+    try("elem[1] ForEachProperty", function()
+        e:ForEachProperty(function(p) log("      member " .. p:GetFName():ToString()) end)
+        return "ok"
+    end)
+end
+
+RegisterConsoleCommandHandler("cmsfdump", function(fullCmd, params)
+    local cls = params and params[1]
+    if not cls or cls == "" then
+        log("usage: cmsfdump <ClassName>   e.g. cmsfdump FWSkinChangeComponent")
+        return true
+    end
+    ExecuteInGameThread(function() dumpClass(cls) end)
+    return true
+end)
+
+RegisterConsoleCommandHandler("cmsfelem", function()
+    ExecuteInGameThread(dumpElem)
+    return true
+end)
+
+-- Auto-run the two that decide the architecture, so a launch is useful even without
+-- reaching the console (which the skin menu draws over anyway).
+ExecuteWithDelay(25000, function()
+    ExecuteInGameThread(function()
+        log("==== auto reflection dump ====")
+        dumpClass("FWSkinChangeComponent")
+        dumpElem()
+        log("==== auto reflection end ====")
+    end)
+end)
+
 RegisterConsoleCommandHandler("cmsfcomp", function()
     ExecuteInGameThread(dumpComp)
     return true
