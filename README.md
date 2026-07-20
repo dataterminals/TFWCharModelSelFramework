@@ -50,6 +50,7 @@ docs/
   00-findings.md    what the datamine proves — the registry, the row struct, entitlements
   01-design.md      injection vectors, the composability constraint, open questions
   02-poc.md         the one-variable experiment that settles the last unknown
+  03-multiplayer.md what happens to mods in co-op — host authority, and skins as soft paths
 ```
 
 ## Prior art in this workspace

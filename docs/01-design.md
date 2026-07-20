@@ -173,10 +173,14 @@ first and none of this applies yet.
   in-game 2026-07-16.)
 - **Signature bypass** (`dsound.dll` + `bitfix\`) is required for any pak mod and is tied
   to the game build. It fails *silently* when a patch breaks the byte pattern.
-- **Multiplayer behaviour is genuinely undocumented.** No repo in this workspace has any
-  finding on whether other players see modded skins, or whether anything server-side
-  validates cosmetics. Existing skin mods state co-op is client-side render-your-own. Treat
-  as unverified, not as settled.
+- **Multiplayer behaviour is resolved** — see [03-multiplayer.md](03-multiplayer.md).
+  Co-op is a host-authoritative listen server over EOS P2P with no anti-cheat, and nothing
+  validates paks at join. Nothing server-side validates cosmetics. The CMSF-relevant part:
+  a skin crosses the wire as a **soft object path string** (`BP_PlayerBase`'s
+  `SERVER`/`CLIENTS Skin Has Changed`), so an appended skin reaches peers as a path they
+  cannot resolve without the pak — a fallback/absent mesh, not a desync or kick. Content
+  mods need the pak on every peer that should see them. Structural evidence only; the
+  two-client test has not been run.
 - **Editing the table.** `ScavgirlCarryPerks`' UAssetAPI `skillpatch` tool is the closest
   existing precedent for synthesising cross-package references and is the likely starting
   point for the table builder.
