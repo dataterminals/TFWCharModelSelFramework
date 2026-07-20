@@ -61,23 +61,28 @@ local function apply(verbose)
                 pcall(function() w.SelectLockedSkinsOnly = false end)
                 pcall(function() w:Init() end)
                 applied = applied + 1
+            end
 
-                if verbose then
-                    -- Report the rebuilt list size: it distinguishes "the unlock worked"
-                    -- from "the CMSF pak did not load". Vanilla Scav Girl unfiltered is 7;
-                    -- more than that means appended skins are present too.
-                    local n = -1
-                    pcall(function()
-                        local kids = w.SkinOptions:GetAllChildren()
-                        n = kids and #kids or -1
-                    end)
-                    log(string.format("unfiltered a selector — it now lists %d skin(s)", n))
+            -- Always report the list size when asked, not only when something changed.
+            -- The poll usually gets there first, so the earlier "only on change" version
+            -- printed nothing on a manual run and left the count to be eyeballed off a
+            -- screenshot. This number is the actual verification: vanilla Scav Girl
+            -- unfiltered is 7, so anything above that is an appended CMSF skin.
+            if verbose then
+                local n = -1
+                pcall(function()
+                    local kids = w.SkinOptions:GetAllChildren()
+                    n = kids and #kids or -1
+                end)
+                if n >= 0 then
+                    log(string.format("selector lists %d skin(s)%s", n,
+                        n > 0 and "" or "  (open the skin menu, then re-run)"))
                 end
             end
         end
     end
     if verbose and seen > 0 and applied == 0 then
-        log(string.format("%d selector(s) already unfiltered", seen))
+        log(string.format("%d selector(s) were already unfiltered", seen))
     end
     return applied, seen
 end
