@@ -41,6 +41,37 @@ skins/
 | `description` | no | shown under the name |
 | `icon` | no | falls back to a stock portrait, so an icon-less skin still renders |
 | `id` | no | defaults to the folder name; becomes the row name `CMSF.<Character>.<id>` |
+| `order` | no | position **among CMSF skins** — lower first, default 100, ties break on `id` |
+
+`order` does not interleave with the stock skins: appended rows always come after every
+vanilla row, so CMSF's skins sit at the end of the list and `order` arranges them within
+that block. Set it if you care; leaving it out is stable regardless, since ties fall back to
+`id` rather than to whatever sequence the filesystem returned.
+
+## Collisions
+
+What CMSF catches:
+
+| Case | Result |
+|---|---|
+| Two manifests with the same `id` for one character | **error**, naming both files |
+| An `id` colliding with a row the game already ships | **error** — otherwise the skin would silently never appear |
+| Two manifests declaring the same mesh path | **warning**, naming both files |
+
+The mesh warning is not always a bug — several rows may share one mesh deliberately to give
+it multiple named entries. But it is also exactly what happens when two authors ship
+different assets at the same `/Game/` path, in which case one silently overwrites the other
+at the pak layer. That is likelier than it sounds: an author who never renamed their Unreal
+project ships under a default name, and default names are identical across projects.
+**Publish your assets under a path unique to your mod.**
+
+What CMSF cannot catch:
+
+- A non-CMSF mod shipping an asset at a path one of your skins uses. CMSF only sees paths
+  declared in manifests.
+- Another mod overriding `DT_SkinUIData` or `BP_Player_*`. CMSF owns those assets, and a pak
+  override replaces a whole asset, so whichever pak has the higher load order wins outright.
+  Nothing else is known to ship them today.
 
 There is no `Mech Trooper` — the sixth character is `MaskMan`.
 

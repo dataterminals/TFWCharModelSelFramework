@@ -82,9 +82,15 @@ static class Patcher
 
     public record Row(string Name, string Display, string Description, string Icon, string Mesh);
 
-    /// <summary>Append rows to DT_SkinUIData. Returns how many were added.</summary>
-    public static int AddRows(string inPath, string usmapPath, string outPath, IEnumerable<Row> rows)
+    /// <summary>
+    /// Append rows to DT_SkinUIData. Returns how many were added; any row whose name already
+    /// existed is reported via <paramref name="collided"/> rather than silently dropped —
+    /// a silent skip would mean a skin simply never appears, with nothing to explain why.
+    /// </summary>
+    public static int AddRows(string inPath, string usmapPath, string outPath, IEnumerable<Row> rows,
+                              out List<string> collided)
     {
+        collided = new List<string>();
         var usmap = new Usmap(usmapPath);
         var asset = new UAsset(inPath, EngineVersion.VER_UE5_4, usmap);
 
@@ -137,7 +143,7 @@ static class Patcher
         int added = 0;
         foreach (var r in rows)
         {
-            if (!existing.Add(r.Name)) continue;        // idempotent
+            if (!existing.Add(r.Name)) { collided.Add(r.Name); continue; }
             data.Add(new StructPropertyData(FName.FromString(asset, r.Name))
             {
                 Ancestry = tplRow.Ancestry,

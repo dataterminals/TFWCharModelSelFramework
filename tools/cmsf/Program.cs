@@ -47,6 +47,14 @@ static class Program
         public string description { get; set; }
         public string mesh { get; set; }
         public string icon { get; set; }
+
+        // Position among CMSF's own skins. The selector lists DT_SkinUIData rows in ROW
+        // ORDER, and appended rows come after every vanilla row — so this controls where a
+        // skin sits within the CMSF block, not its absolute position in the menu. Lower
+        // sorts first; ties break on id so the result never depends on the order the
+        // filesystem happened to hand back.
+        public int? order { get; set; }
+
         public string Source;
         public string Row => $"CMSF.{character}.{id}";
     }
@@ -218,8 +226,14 @@ static class Program
             throw new Exception("the game did not yield DT_SkinUIData");
         Directory.CreateDirectory(Path.Combine(staged, Path.GetDirectoryName(TableRel)!));
         int rowsAdded = Patcher.AddRows(Path.Combine(src, TableRel), usmap, Path.Combine(staged, TableRel),
-            skins.Select(s => new Patcher.Row(s.Row, s.name, s.description ?? "", s.icon, s.mesh)));
+            skins.Select(s => new Patcher.Row(s.Row, s.name, s.description ?? "", s.icon, s.mesh)),
+            out var collidedRows);
         Console.WriteLine($"==> DT_SkinUIData: +{rowsAdded} row(s)");
+        if (collidedRows.Count > 0)
+            throw new Exception(
+                "these row names already exist in the game's own table, so the skins would\n" +
+                "  never appear:\n    " + string.Join("\n    ", collidedRows) +
+                "\n  Rename them with an \"id\" field in the manifest.");
 
         // ---- repack --------------------------------------------------------------------
         var outDir = Path.Combine(ExeDir, "out");
@@ -312,7 +326,30 @@ static class Program
         foreach (var dup in skins.GroupBy(s => s.Row, StringComparer.OrdinalIgnoreCase).Where(g => g.Count() > 1))
             throw new Exception($"two manifests claim the same id '{dup.Key}':\n    " +
                                 string.Join("\n    ", dup.Select(d => d.Source)));
-        return skins;
+
+        // Two manifests naming the same mesh path. Legitimate on purpose — several rows may
+        // share one mesh to give it multiple named entries — but it is also what happens
+        // when two authors ship different assets at the same /Game/ path, which one of them
+        // then silently overwrites at the pak layer. CMSF cannot tell those apart from a
+        // manifest alone, and the accidental case is very plausible: an author who never
+        // renamed their Unreal project ships under a default name, and default names are
+        // identical across projects. So warn rather than fail.
+        foreach (var g in skins.GroupBy(s => s.mesh, StringComparer.OrdinalIgnoreCase).Where(g => g.Count() > 1))
+        {
+            Console.WriteLine($"  WARNING two manifests use the same mesh path:");
+            Console.WriteLine($"          {g.Key}");
+            foreach (var s in g) Console.WriteLine($"            {s.Source}");
+            Console.WriteLine("          Intentional if you meant several named entries for one mesh.");
+            Console.WriteLine("          Otherwise the mods collide at the pak layer and one will win.");
+        }
+
+        // Deterministic order. Without this the menu order follows whatever sequence the
+        // filesystem enumerated the manifests in, which is neither controllable nor stable
+        // across machines — two people with the same mods could see different orderings.
+        return skins
+            .OrderBy(s => s.order ?? 100)
+            .ThenBy(s => s.id, StringComparer.OrdinalIgnoreCase)
+            .ToList();
     }
 
     static void Exec(string exe, string[] argv)
