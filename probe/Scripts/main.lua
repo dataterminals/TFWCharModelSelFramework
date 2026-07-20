@@ -1,634 +1,195 @@
--- CMSF Probe — read the LIVE DT_SkinUIData and the LIVE skin-selection widget.
+-- CMSF Probe v2 — lean.
 --
--- Answers the one question the character-select menu cannot: did our pak actually reach
--- the runtime table? A skin that does not appear is ambiguous between "the pak never
--- mounted" and "the pak mounted but the UI filters the row out", and those have opposite
--- fixes. This separates them.
+-- v1 accumulated dead experiments and, more importantly, a post-hook on
+-- GetAvailableSkins. That function is queried by the selector UI (four player panels in the
+-- ready room), and a UE4SS hook on a hot native function is not free — it is the prime
+-- suspect for the client lag reported on the last run. It has served its purpose and is
+-- gone. Nothing here hooks a per-frame function.
 --
---   live rows == 35 (ScavGirl5 + CMSF.Girl.TEST present) -> pak mounted, UI is filtering
---   live rows == 33                                      -> pak never mounted; deployment bug
+-- Established so far (see docs/00-findings.md):
+--   * roster = FWSkinChangeComponent.SkinChoices / .LockedSkinChoices on BP_Player_<Char>
+--   * DT_SkinUIData supplies name/icon; a row shows when its Skin path is in the roster
+--   * GetAvailableSkins() -> 7 (all), GetUnlockedSkins() -> 2 (entitled)
+--     SelectLockedSkinsOnly merely chooses WHICH getter the widget calls
+--   * SetNewSkin takes an ObjectProperty — a loaded UObject, NOT a string or soft path
+--     (v1 passed a string: "[push_objectproperty] Error")
 --
--- Console: `cmsfprobe`.  Also auto-runs on a delay after ClientRestart.
--- Output goes to UE4SS.log, every line prefixed [CMSF] so it greps cleanly.
---
--- Reading a UDataTable's RowMap is not directly reachable from Lua (raw uint8* rows, not
--- reflected), so this goes through the reflected static UFunction
--- UDataTableFunctionLibrary::GetDataTableRowNames instead. UE4SS's handling of TArray out
--- params varies by build, so each call shape is tried in turn and the one that worked is
--- logged — the same defensive style as TFWQuestItemTag's three-way FText fallback.
+-- Commands:
+--   cmsfapply [path]   load a mesh and apply it via SetNewSkin + ForceUpdateSkin
+--   cmsfmenu           arm the GetUnlockedSkins hook (see below)
+--   cmsfdump <Class>   reflection dump of a live instance's class chain
+--   cmsfunlock         one-shot: clear SelectLockedSkinsOnly on live selectors
 
--- SelectLockedSkinsOnly (a CDO property on WBP_SkinSelection_C, default TRUE) is the
--- prime suspect for why appended rows never show. Sylvia reports the selector only ever
--- offers entitlement-gated DLC skins — the shipped base skins are NOT selectable there,
--- they only turn up via the random skin roll on respawn in the tunnels. That matches a
--- filter that keeps "locked"/entitled rows and drops everything else, which would reject
--- an appended row no matter what it is named. `cmsfunlock` flips it and rebuilds.
-
-local TABLE_PATH = "/Game/FW/Player/Data/DT_SkinUIData.DT_SkinUIData"
+local MESH = "/Game/Character/Scavengers/Female/Skins/OCT/SK_SCV_FL_OCT"
 local WIDGET_CLASS = "/Game/FW/UI/MainMenu/UMG/Panels/WBP_SkinSelection.WBP_SkinSelection_C"
-local WANT = { ["ScavGirl5"] = true, ["CMSF.Girl.TEST"] = true }
+local COMP_FN = "/Script/FWGameCore.FWSkinChangeComponent"
 
-local UNLOCK = false   -- set by `cmsfunlock`; applied on the next widget Init
+local MENU_HOOK = false     -- armed by `cmsfmenu`
 
 local function log(s) print("[CMSF] " .. tostring(s) .. "\n") end
-
-local function findTable()
-    local dt = StaticFindObject(TABLE_PATH)
-    if dt and dt:IsValid() then return dt, "StaticFindObject" end
-    local ok, loaded = pcall(function() return LoadAsset(TABLE_PATH) end)
-    if ok and loaded and loaded:IsValid() then return loaded, "LoadAsset" end
-    -- Last resort: the table may be loaded under a different outer.
-    local found = FindAllOf("DataTable")
-    if found then
-        for _, t in pairs(found) do
-            if t:IsValid() and t:GetFullName():find("DT_SkinUIData", 1, true) then
-                return t, "FindAllOf"
-            end
-        end
-    end
-    return nil, nil
-end
-
-local function rowNames(dt)
-    local lib = StaticFindObject("/Script/Engine.Default__DataTableFunctionLibrary")
-    if not lib or not lib:IsValid() then return nil, "no DataTableFunctionLibrary" end
-
-    -- Shape A: out param returned
-    local ok, res = pcall(function() return lib:GetDataTableRowNames(dt) end)
-    if ok and type(res) == "table" and #res > 0 then return res, "returned" end
-
-    -- Shape B: out param filled in a passed table
-    local out = {}
-    local ok2 = pcall(function() lib:GetDataTableRowNames(dt, out) end)
-    if ok2 and #out > 0 then return out, "filled" end
-
-    return nil, string.format("both shapes failed (A ok=%s type=%s) (B ok=%s n=%d)",
-        tostring(ok), type(res), tostring(ok2), #out)
-end
-
-local function probeTable()
-    local dt, how = findTable()
-    if not dt then
-        log("TABLE: NOT FOUND — it may simply not be loaded yet; open the skin menu, then rerun `cmsfprobe`")
-        return
-    end
-    log(string.format("TABLE: found via %s -> %s", how, dt:GetFullName()))
-
-    local names, why = rowNames(dt)
-    if not names then
-        log("TABLE: could not enumerate rows: " .. tostring(why))
-        return
-    end
-
-    -- UE4SS hands back FName objects, not strings. tostring() on one yields a userdata
-    -- repr, not the name — which silently turned every lookup below into a false ABSENT
-    -- on the first run even though the row count proved the rows were there. Always
-    -- :ToString() an FName before comparing.
-    local function nameStr(n)
-        if type(n) == "string" then return n end
-        local ok, s = pcall(function() return n:ToString() end)
-        if ok and type(s) == "string" then return s end
-        return tostring(n)
-    end
-
-    local seen, total, sample = {}, 0, {}
-    for _, n in ipairs(names) do
-        local s = nameStr(n)
-        total = total + 1
-        seen[s] = true
-        if total <= 3 then sample[#sample + 1] = s end
-    end
-    log(string.format("TABLE: %d rows (via %s)", total, why))
-    log("TABLE: first rows = " .. table.concat(sample, ", "))   -- sanity-check the conversion
-
-    for want, _ in pairs(WANT) do
-        log(string.format("TABLE:   %-16s %s", want, seen[want] and "PRESENT" or "ABSENT"))
-    end
-
-    -- Every ScavGirl-ish row, so we can see what the base sequence actually looks like live.
-    local girls = {}
-    for s, _ in pairs(seen) do
-        if s:lower():find("scavgirl") or s:lower():find("girl") then girls[#girls + 1] = s end
-    end
-    table.sort(girls)
-    log("TABLE: girl rows = " .. table.concat(girls, ", "))
-end
-
-local function probeWidget()
-    local found = FindAllOf("WBP_SkinSelection_C")
-    if not found or #found == 0 then
-        log("WIDGET: no live WBP_SkinSelection_C (open the skin menu, then rerun `cmsfprobe`)")
-        return
-    end
-    for _, w in pairs(found) do
-        if w:IsValid() then
-            log("WIDGET: " .. w:GetFullName())
-            local ok = pcall(function()
-                local box = w.SkinOptions
-                if box and box:IsValid() then
-                    local kids = box:GetAllChildren()
-                    log(string.format("WIDGET:   SkinOptions children = %d", kids and #kids or -1))
-                end
-            end)
-            if not ok then log("WIDGET:   could not read SkinOptions") end
-            pcall(function()
-                log("WIDGET:   SelectLockedSkinsOnly = " .. tostring(w.SelectLockedSkinsOnly))
-            end)
-        end
-    end
-end
-
-local function probe()
-    log("==== probe start ====")
-    probeTable()
-    probeWidget()
-    log("==== probe end ====")
-end
-
--- Flip SelectLockedSkinsOnly on every live selector and force it to rebuild.
--- Init is what populates SkinOptions, so the flag has to be false BEFORE it runs; setting
--- it on an already-built widget does nothing until the list is regenerated.
-local function unlockLive()
-    local found = FindAllOf("WBP_SkinSelection_C")
-    if not found or #found == 0 then
-        log("UNLOCK: no live selector — open the skin menu first, then rerun `cmsfunlock`")
-        return
-    end
-    for _, w in pairs(found) do
-        if w:IsValid() then
-            local before = "?"
-            pcall(function() before = tostring(w.SelectLockedSkinsOnly) end)
-            local ok = pcall(function() w.SelectLockedSkinsOnly = false end)
-            local after = "?"
-            pcall(function() after = tostring(w.SelectLockedSkinsOnly) end)
-            log(string.format("UNLOCK: set ok=%s  %s -> %s", tostring(ok), before, after))
-            -- Rebuild. Init's signature is unknown, so try no-arg then give up loudly.
-            local rebuilt = pcall(function() w:Init() end)
-            log("UNLOCK: Init() rebuild " .. (rebuilt and "called" or "FAILED (needs args?) — reopen the menu instead"))
-        end
-    end
-    probeWidget()
-end
-
--- The BP class is not in memory at script load, so RegisterHook would fail with "no
--- UFunction with the specified name was found" (the TFWQuestItemTag lesson). Poll until
--- the class exists, register once, then stop.
--- Clearing the flag before Init is NOT enough: the unlock has to be re-run on every menu
--- re-entry, which means Init's own body re-asserts it — the caller almost certainly passes
--- it in. Corroborating: calling Init() with NO arguments yields the unlocked list, i.e. the
--- missing parameter defaults to false.
---
--- So we let Init run, and if it comes back locked we flip the flag and re-enter Init bare,
--- guarded against recursion. Crude but it uses the one call already proven to rebuild
--- unfiltered. The real framework should override the parameter instead of re-entering —
--- `cmsfsig` dumps Init's signature so that can be done properly.
-local reentry = false
-
-local function onInitPost(self)
-    if not UNLOCK or reentry then return end
-    local ok, w = pcall(function() return self:get() end)
-    if not ok or not w then return end
-    local locked = true
-    pcall(function() locked = w.SelectLockedSkinsOnly end)
-    if not locked then return end          -- already unfiltered, nothing to do
-    reentry = true
-    pcall(function() w.SelectLockedSkinsOnly = false end)
-    local rebuilt = pcall(function() w:Init() end)
-    reentry = false
-    log("UNLOCK: re-asserted after Init (rebuild " .. (rebuilt and "ok" or "FAILED") .. ")")
-end
-
-local hooked = false
-LoopAsync(2000, function()
-    if hooked then return true end     -- true stops the loop
-    local cls = StaticFindObject(WIDGET_CLASS)
-    if not cls or not cls:IsValid() then return false end
-    local ok = pcall(function()
-        RegisterHook(WIDGET_CLASS .. ":Init",
-            function(self)   -- pre
-                if not UNLOCK or reentry then return end
-                pcall(function() self:get().SelectLockedSkinsOnly = false end)
-            end,
-            onInitPost)
-    end)
-    hooked = ok
-    log("HOOK: WBP_SkinSelection_C:Init " .. (ok and "registered (pre+post)" or "registration failed"))
-    return ok
-end)
-
--- Dump Init's parameter list, so the framework can override the argument rather than
--- re-entering the function.
-RegisterConsoleCommandHandler("cmsfsig", function()
-    ExecuteInGameThread(function()
-        local fn = StaticFindObject(WIDGET_CLASS .. ":Init")
-        if not fn or not fn:IsValid() then log("SIG: Init UFunction not found") return end
-        log("SIG: " .. fn:GetFullName())
-        local ok = pcall(function()
-            fn:ForEachProperty(function(prop)
-                log(string.format("SIG:   %s : %s", prop:GetFName():ToString(), prop:GetClass():GetFName():ToString()))
-            end)
-        end)
-        if not ok then log("SIG: ForEachProperty unavailable on this UE4SS build") end
-    end)
-    return true
-end)
-
--- The actual skin roster is NOT DT_SkinUIData. It lives on the pawn Blueprint, in an
--- FWSkinChangeComponent holding two reflected arrays:
---   SkinChoices        TArray<FSoftObjectPath>            the free / random-respawn pool
---   LockedSkinChoices  TMap<FGameplayTag, FSoftObjectPath> the entitlement-gated menu
--- SelectLockedSkinsOnly picks which one feeds the selector. DT_SkinUIData only supplies
--- display name + icon. These are ordinary UPROPERTYs, so unlike a DataTable RowMap they
--- are reachable from Lua — which is what makes a pure-Lua framework plausible.
-local OCT = "/Game/Character/Scavengers/Female/Skins/OCT/SK_SCV_FL_OCT.SK_SCV_FL_OCT"
 
 local function findSkinComp()
     local comps = FindAllOf("FWSkinChangeComponent")
     if not comps then return nil end
     for _, c in pairs(comps) do
         if c:IsValid() then
-            local owner = "?"
-            pcall(function() owner = c:GetFullName() end)
-            if owner:find("Girl", 1, true) or owner:find("Default__", 1, true) == nil then
-                return c, owner
-            end
+            local n = ""
+            pcall(function() n = c:GetFullName() end)
+            if not n:find("Default__", 1, true) then return c end
         end
     end
     return nil
 end
 
-local function pathOf(v)
-    local out = "?"
-    pcall(function()
-        if v.AssetPath then
-            out = tostring(v.AssetPath.PackageName:ToString())
-        elseif v.AssetPathName then
-            out = tostring(v.AssetPathName:ToString())
-        else
-            out = tostring(v)
-        end
-    end)
-    return out
-end
-
-local function dumpComp()
-    local c, owner = findSkinComp()
-    if not c then log("COMP: no live FWSkinChangeComponent (be in a match / ready room)") return end
-    log("COMP: " .. tostring(owner))
-
-    local ok = pcall(function()
-        local arr = c.SkinChoices
-        local n = #arr
-        log(string.format("COMP: SkinChoices n=%d", n))
-        for i = 1, n do
-            log(string.format("COMP:   [%d] %s", i, pathOf(arr[i])))
-        end
-    end)
-    if not ok then log("COMP: could not read SkinChoices") end
-
-    pcall(function()
-        local m = c.LockedSkinChoices
-        log("COMP: LockedSkinChoices type=" .. type(m))
-    end)
-end
-
--- Prove the linkage: make an existing free slot point at the cut OCT mesh. If the selector
--- then shows "October" (the DT_SkinUIData row we appended for exactly that mesh path), the
--- whole model is confirmed — roster array drives availability, table drives presentation.
--- Overwrite in place rather than append, because mutating an existing element is far more
--- likely to work from Lua than growing a TArray of structs.
-local function addOct()
-    local c, owner = findSkinComp()
-    if not c then log("ADD: no live FWSkinChangeComponent") return end
-
-    local before, after, okw = "?", "?", false
-    pcall(function()
-        local arr = c.SkinChoices
-        local n = #arr
-        if n < 1 then log("ADD: SkinChoices empty") return end
-        before = pathOf(arr[n])
-        -- Shape A: assign the whole soft path via its string field
-        okw = pcall(function() arr[n].AssetPath.PackageName = FName(OCT:match("^(.*)%.")) end)
-        if not okw then
-            -- Shape B: some builds expose AssetPathName directly
-            okw = pcall(function() arr[n].AssetPathName = FName(OCT) end)
-        end
-        after = pathOf(arr[n])
-    end)
-    log(string.format("ADD: slot write ok=%s  %s -> %s", tostring(okw), before, after))
-    log("ADD: now reopen the skin menu (run cmsfunlock first if you have not)")
-end
-
--- ---------------------------------------------------------------------------------------
--- Reflection dumper. Deciding static-vs-runtime hinges on whether FWSkinChangeComponent
--- exposes a callable function for adding/changing a skin: if it does, the runtime design
--- works and nothing needs pak-overriding. Written generically (dump any class by name)
--- because every previous single-purpose probe cost a full game launch to learn one fact.
---
---   cmsfdump FWSkinChangeComponent
---   cmsfdump WBP_SkinSelection_C
---   cmsfdump WBP_PlayerStatusWidget_C
---   cmsfelem                          deep introspection of one SkinChoices element
-
-local function try(label, fn)
-    local ok, res = pcall(fn)
-    if ok then
-        if res ~= nil then log(string.format("    %-28s = %s", label, tostring(res))) end
-        return true, res
-    end
-    log(string.format("    %-28s ! %s", label, tostring(res):sub(1, 90)))
-    return false, nil
-end
-
-local function dumpStruct(st, depth)
-    if not st or not st:IsValid() then return end
-    local name = "?"
-    pcall(function() name = st:GetFullName() end)
-    log("  CLASS: " .. name)
-
-    local nf = 0
-    local okF = pcall(function()
-        st:ForEachFunction(function(f)
-            nf = nf + 1
-            local fname = "?"
-            pcall(function() fname = f:GetFName():ToString() end)
-            log("    fn   " .. fname)
-        end)
-    end)
-    if not okF then log("    (ForEachFunction unavailable)") end
-    if okF and nf == 0 then log("    (no functions on this class)") end
-
-    local okP = pcall(function()
-        st:ForEachProperty(function(p)
-            local pname, ptype = "?", "?"
-            pcall(function() pname = p:GetFName():ToString() end)
-            pcall(function() ptype = p:GetClass():GetFName():ToString() end)
-            log(string.format("    prop %-32s %s", pname, ptype))
-        end)
-    end)
-    if not okP then log("    (ForEachProperty unavailable)") end
-
-    if depth <= 0 then return end
-    local super = nil
-    pcall(function() super = st:GetSuperStruct() end)
-    if super == nil then pcall(function() super = st:GetSuper() end) end
-    if super and super:IsValid() then dumpStruct(super, depth - 1) end
-end
-
-local function dumpClass(className)
-    local obj = FindFirstOf(className)
-    if not obj or not obj:IsValid() then
-        log("DUMP: no live instance of " .. className)
-        local cls = StaticFindObject("/Script/FWGameCore." .. className)
-        if cls and cls:IsValid() then log("DUMP: (class object exists though: " .. cls:GetFullName() .. ")") end
-        return
-    end
-    log("DUMP: instance " .. obj:GetFullName())
-    local cls = nil
-    pcall(function() cls = obj:GetClass() end)
-    dumpStruct(cls, 3)   -- walk a few supers; the useful function may be inherited
-end
-
--- Everything about writing the roster from Lua failed with the accessors guessed so far.
--- Rather than guess again, enumerate what an element actually responds to.
-local function dumpElem()
-    local c = findSkinComp()
-    if not c then log("ELEM: no live FWSkinChangeComponent") return end
-    local arr = nil
-    if not select(1, try("SkinChoices", function() arr = c.SkinChoices; return type(arr) end)) then return end
-    try("#SkinChoices", function() return #arr end)
-
-    local e = nil
-    if not select(1, try("elem[1] lua type", function() e = arr[1]; return type(e) end)) then return end
-
-    try("elem[1] tostring", function() return tostring(e) end)
-    try("elem[1]:type()", function() return e:type() end)
-    try("elem[1]:GetFullName()", function() return e:GetFullName() end)
-    try("elem[1]:get()", function() return tostring(e:get()) end)
-    try("elem[1].AssetPath", function() return tostring(e.AssetPath) end)
-    try("elem[1].AssetPathName", function() return tostring(e.AssetPathName) end)
-    try("elem[1].SubPathString", function() return tostring(e.SubPathString) end)
-    try("elem[1] ForEachProperty", function()
-        e:ForEachProperty(function(p) log("      member " .. p:GetFName():ToString()) end)
-        return "ok"
-    end)
-end
-
--- FWSkinChangeComponent's real API (from cmsfdump):
---     GetAvailableSkins  GetUnlockedSkins  SetSelectedSkin  SetNewSkin  ForceUpdateSkin
---     OnRep_UpdateSkin   OnDeath
---     SkinChoices[Array] LockedSkinChoices[Map] SelectedSkin[Object] SaveGame[Object]
---
--- GetAvailableSkins is the likely feed for the selector, so hooking it and returning an
--- augmented list would need no pak override at all. Before that: elements are
--- TSoftObjectPtrUserdata, and every attribute guess returned the object itself (UE4SS's
--- __index falls through), which is why four separate write attempts failed silently.
--- Enumerate the metatable instead of guessing a fifth time.
-local function dumpMeta(label, v)
-    log(string.format("META: %s  type=%s", label, type(v)))
-    local ok, mt = pcall(getmetatable, v)
-    if not ok or not mt then log("META:   (no metatable)") return end
-    local shown = 0
-    for k, mv in pairs(mt) do
-        log(string.format("META:   mt.%-16s %s", tostring(k), type(mv)))
-        shown = shown + 1
-        if shown > 40 then log("META:   ...") break end
-    end
-    if type(mt.__index) == "table" then
-        local n = 0
-        for k, mv in pairs(mt.__index) do
-            log(string.format("META:   .%-24s %s", tostring(k), type(mv)))
-            n = n + 1
-            if n > 60 then log("META:   ...(truncated)") break end
-        end
-        if n == 0 then log("META:   __index table is empty") end
-    elseif mt.__index ~= nil then
-        log("META:   __index is a " .. type(mt.__index) .. " (not enumerable)")
-    end
-end
-
-local function probeApi()
-    local c = findSkinComp()
-    if not c then log("API: no live FWSkinChangeComponent — be in the hub/a raid") return end
-    log("API: " .. c:GetFullName())
-
-    -- The two getters: what do they return, and in what shape?
-    for _, fn in ipairs({ "GetAvailableSkins", "GetUnlockedSkins" }) do
-        local ok, res = pcall(function() return c[fn](c) end)
-        if not ok then
-            log(string.format("API: %s ! %s", fn, tostring(res):sub(1, 100)))
-        else
-            log(string.format("API: %s -> type=%s", fn, type(res)))
-            pcall(function() log(string.format("API:   #=%d", #res)) end)
-            if res ~= nil and type(res) ~= "number" then dumpMeta(fn .. "()", res) end
-        end
-    end
-
-    -- The array itself, and one element.
-    local arr
-    if pcall(function() arr = c.SkinChoices end) and arr then
-        dumpMeta("SkinChoices", arr)
-        local e
-        if pcall(function() e = arr[1] end) and e then
-            dumpMeta("SkinChoices[1]", e)
-            -- Most likely readers on a TSoftObjectPtr wrapper.
-            for _, m in ipairs({ "GetPathName", "ToString", "GetAssetName", "GetAssetPathString", "Get" }) do
-                local ok, v = pcall(function() return e[m](e) end)
-                log(string.format("API:   elem:%-20s %s", m, ok and tostring(v) or "!"))
-            end
-        end
-    end
-
-    pcall(function() dumpMeta("SelectedSkin", c.SelectedSkin) end)
-end
-
-RegisterConsoleCommandHandler("cmsfapi", function()
-    ExecuteInGameThread(probeApi)
-    return true
-end)
-
--- GetAvailableSkins() -> plain Lua table of 7, GetUnlockedSkins() -> 2. Those are exactly
--- the unfiltered and filtered menu counts, so SelectLockedSkinsOnly only chooses which
--- getter the widget calls. Two routes could make a custom skin selectable without any pak
--- override; this tests both, plus the table contents (logged length last time but not the
--- elements, which is the part that decides whether a new entry can be constructed).
-
 local function dumpTable(label, t)
     if type(t) ~= "table" then log(string.format("TBL: %s is %s", label, type(t))) return end
-    log(string.format("TBL: %s  n=%d", label, #t))
+    log(string.format("TBL: %s n=%d", label, #t))
     for i = 1, #t do
-        local v = t[i]
-        local desc = type(v)
+        local v, desc, extra = t[i], type(t[i]), ""
         pcall(function() if type(v) == "userdata" then desc = v:type() end end)
-        local extra = ""
-        pcall(function() extra = " " .. v:GetFullName() end)
-        if extra == "" then pcall(function() extra = " " .. tostring(v) end) end
+        -- Elements arrive as RemoteUnrealParam; :get() is what unwraps them.
+        pcall(function()
+            local g = v:get()
+            extra = " get->" .. type(g)
+            pcall(function() extra = extra .. " " .. g:GetFullName() end)
+        end)
         log(string.format("TBL:   [%d] %s%s", i, desc, extra))
     end
 end
 
--- Route 1: call SetNewSkin directly. If UE4SS marshals a Lua string into the
--- TSoftObjectPtr parameter, an arbitrary mesh can be applied at runtime with one call and
--- the whole roster-write problem is moot. Borrowing an existing element is the control:
--- if that works and the string does not, the call is fine and only marshalling is at fault.
-local function probeApply(pathArg)
+-- ---------------------------------------------------------------------------------------
+-- TEST A — apply an arbitrary mesh at runtime.
+-- SetNewSkin wants a UObject, so load the mesh first. If this works, a custom skin can be
+-- applied with no pak override at all.
+local function apply(pathArg)
     local c = findSkinComp()
     if not c then log("APPLY: no live FWSkinChangeComponent") return end
-    local target = pathArg or OCT
+    local path = pathArg or MESH
 
-    dumpTable("GetAvailableSkins", (function() local ok, r = pcall(function() return c:GetAvailableSkins() end); return ok and r or nil end)())
-    dumpTable("GetUnlockedSkins",  (function() local ok, r = pcall(function() return c:GetUnlockedSkins() end); return ok and r or nil end)())
+    local mesh
+    local okLoad = pcall(function() mesh = LoadAsset(path) end)
+    log(string.format("APPLY: LoadAsset ok=%s type=%s", tostring(okLoad), type(mesh)))
+    if mesh then pcall(function() log("APPLY:   " .. mesh:GetFullName()) end) end
+    if not mesh then
+        pcall(function() mesh = StaticFindObject(path .. "." .. path:match("([^/]+)$")) end)
+        log("APPLY: fallback StaticFindObject type=" .. type(mesh))
+    end
+    if not mesh then log("APPLY: could not obtain the mesh object") return end
 
-    local ok1, e1 = pcall(function() return c:SetNewSkin(target) end)
-    log(string.format("APPLY: SetNewSkin(string) ok=%s %s", tostring(ok1), ok1 and "" or tostring(e1):sub(1, 110)))
+    local ok1, e1 = pcall(function() return c:SetNewSkin(mesh) end)
+    log(string.format("APPLY: SetNewSkin(UObject) ok=%s %s", tostring(ok1), ok1 and "" or tostring(e1):sub(1, 120)))
 
-    local ok2, e2 = pcall(function() return c:SetSelectedSkin(target) end)
-    log(string.format("APPLY: SetSelectedSkin(string) ok=%s %s", tostring(ok2), ok2 and "" or tostring(e2):sub(1, 110)))
+    local ok2, e2 = pcall(function() return c:SetSelectedSkin(mesh) end)
+    log(string.format("APPLY: SetSelectedSkin(UObject) ok=%s %s", tostring(ok2), ok2 and "" or tostring(e2):sub(1, 120)))
 
-    -- Control: hand it a soft pointer the game already owns.
-    pcall(function()
-        local borrowed = c.SkinChoices[1]
-        local ok3, e3 = pcall(function() return c:SetNewSkin(borrowed) end)
-        log(string.format("APPLY: SetNewSkin(borrowed elem) ok=%s %s", tostring(ok3), ok3 and "" or tostring(e3):sub(1, 110)))
-    end)
-
-    local ok4 = pcall(function() c:ForceUpdateSkin() end)
-    log("APPLY: ForceUpdateSkin ok=" .. tostring(ok4))
+    local ok3 = pcall(function() c:ForceUpdateSkin() end)
+    log("APPLY: ForceUpdateSkin ok=" .. tostring(ok3))
+    log("APPLY: look at your character — did the skin change?")
 end
 
-RegisterConsoleCommandHandler("cmsfapply", function(fullCmd, params)
-    local p = params and params[1]
-    ExecuteInGameThread(function() probeApply(p ~= "" and p or nil) end)
-    return true
-end)
-
--- Route 2: hook GetAvailableSkins and see what a post-callback actually receives. If the
--- return value is reachable and settable, injecting extra skins needs no pak override at
--- all — which is the whole argument for the runtime design.
-local hookedGet = false
+-- ---------------------------------------------------------------------------------------
+-- TEST B — make the selector show everything, permanently, without touching the flag.
+-- SelectLockedSkinsOnly only decides whether the widget calls GetUnlockedSkins (2) or
+-- GetAvailableSkins (7). So instead of fighting the flag on every menu open, hook the
+-- narrow getter and hand back the wide list. Both are the same return type, and the wide
+-- one can simply be called — nothing has to be constructed, which is what blocked every
+-- previous attempt.
+--
+-- GetUnlockedSkins is called when the menu is built, not per frame, so this should not
+-- carry the cost that the GetAvailableSkins hook did. Left opt-in via `cmsfmenu` anyway.
+local hookedMenu = false
 LoopAsync(3000, function()
-    if hookedGet then return true end
-    local fn = StaticFindObject("/Script/FWGameCore.FWSkinChangeComponent:GetAvailableSkins")
+    if hookedMenu then return true end
+    local fn = StaticFindObject(COMP_FN .. ":GetUnlockedSkins")
     if not fn or not fn:IsValid() then return false end
     local ok = pcall(function()
-        RegisterHook("/Script/FWGameCore.FWSkinChangeComponent:GetAvailableSkins",
-            function() end,
-            function(self, ret)
-                if HOOK_LOGGED then return end
-                HOOK_LOGGED = true      -- once only; this is called constantly
-                log("HOOKRET: post-hook fired")
-                log("HOOKRET:   self type = " .. type(self))
-                log("HOOKRET:   ret  type = " .. type(ret))
-                pcall(function() log("HOOKRET:   ret:type() = " .. tostring(ret:type())) end)
-                pcall(function() log("HOOKRET:   ret:get() type = " .. type(ret:get())) end)
-                pcall(function() local g = ret:get(); log("HOOKRET:   ret:get() n = " .. tostring(#g)) end)
-            end)
+        RegisterHook(COMP_FN .. ":GetUnlockedSkins", function() end, function(self, ret)
+            if not MENU_HOOK then return end
+            local okAll, all = pcall(function() return self:get():GetAvailableSkins() end)
+            if not okAll or type(all) ~= "table" then return end
+            local okSet, err = pcall(function() ret:set(all) end)
+            if not MENU_REPORTED then
+                MENU_REPORTED = true
+                log(string.format("MENU: widen %d -> %d  set ok=%s %s",
+                    -1, #all, tostring(okSet), okSet and "" or tostring(err):sub(1, 110)))
+            end
+        end)
     end)
-    hookedGet = ok
-    log("HOOK: GetAvailableSkins " .. (ok and "registered" or "registration failed"))
+    hookedMenu = ok
+    log("HOOK: GetUnlockedSkins " .. (ok and "registered" or "FAILED"))
     return ok
 end)
 
-RegisterConsoleCommandHandler("cmsfdump", function(fullCmd, params)
-    local cls = params and params[1]
-    if not cls or cls == "" then
-        log("usage: cmsfdump <ClassName>   e.g. cmsfdump FWSkinChangeComponent")
-        return true
-    end
-    ExecuteInGameThread(function() dumpClass(cls) end)
+RegisterConsoleCommandHandler("cmsfmenu", function()
+    MENU_HOOK = true
+    MENU_REPORTED = false
+    log("MENU: armed — reopen the skin menu; it should list every skin with no unlock command")
     return true
 end)
 
-RegisterConsoleCommandHandler("cmsfelem", function()
-    ExecuteInGameThread(dumpElem)
+RegisterConsoleCommandHandler("cmsfapply", function(fullCmd, params)
+    local p = params and params[1]
+    ExecuteInGameThread(function() apply(p ~= "" and p or nil) end)
     return true
 end)
 
--- Auto-run the two that decide the architecture, so a launch is useful even without
--- reaching the console (which the skin menu draws over anyway).
--- The previous auto-run fired at a fixed 25s and found nothing, because the pawn (and so
--- the component) does not exist that early. Poll instead, and fire once it is actually
--- there — a fixed delay was measuring the loading screen.
-local autoDone = false
-LoopAsync(8000, function()
-    if autoDone then return true end
-    local c = findSkinComp()
-    if not c then return false end
-    autoDone = true
+RegisterConsoleCommandHandler("cmsfskins", function()
     ExecuteInGameThread(function()
-        log("==== auto reflection dump ====")
-        dumpClass("FWSkinChangeComponent")
-        probeApi()
-        log("==== auto reflection end ====")
+        local c = findSkinComp()
+        if not c then log("no live FWSkinChangeComponent") return end
+        pcall(function() dumpTable("GetAvailableSkins", c:GetAvailableSkins()) end)
+        pcall(function() dumpTable("GetUnlockedSkins", c:GetUnlockedSkins()) end)
     end)
     return true
 end)
 
-RegisterConsoleCommandHandler("cmsfcomp", function()
-    ExecuteInGameThread(dumpComp)
-    return true
-end)
+-- Kept from v1: general reflection dump, and the one-shot manual unlock (the v1 post-Init
+-- re-entry hack is gone — it never held across menu re-entry and was pure overhead).
+local function dumpStruct(st, depth)
+    if not st or not st:IsValid() then return end
+    local n = "?"; pcall(function() n = st:GetFullName() end)
+    log("  CLASS: " .. n)
+    pcall(function() st:ForEachFunction(function(f)
+        local fn = "?"; pcall(function() fn = f:GetFName():ToString() end)
+        log("    fn   " .. fn)
+    end) end)
+    pcall(function() st:ForEachProperty(function(p)
+        local pn, pt = "?", "?"
+        pcall(function() pn = p:GetFName():ToString() end)
+        pcall(function() pt = p:GetClass():GetFName():ToString() end)
+        log(string.format("    prop %-32s %s", pn, pt))
+    end) end)
+    if depth <= 0 then return end
+    local super; pcall(function() super = st:GetSuperStruct() end)
+    if super and super:IsValid() then dumpStruct(super, depth - 1) end
+end
 
-RegisterConsoleCommandHandler("cmsfadd", function()
-    ExecuteInGameThread(addOct)
+RegisterConsoleCommandHandler("cmsfdump", function(fullCmd, params)
+    local cls = params and params[1]
+    if not cls or cls == "" then log("usage: cmsfdump <ClassName>") return true end
+    ExecuteInGameThread(function()
+        local o = FindFirstOf(cls)
+        if not o or not o:IsValid() then log("DUMP: no live instance of " .. cls) return end
+        log("DUMP: " .. o:GetFullName())
+        local c; pcall(function() c = o:GetClass() end)
+        dumpStruct(c, 3)
+    end)
     return true
 end)
 
 RegisterConsoleCommandHandler("cmsfunlock", function()
-    UNLOCK = true
-    log("UNLOCK: armed — reopening the skin menu will rebuild it unfiltered")
-    ExecuteInGameThread(unlockLive)
+    ExecuteInGameThread(function()
+        local found = FindAllOf("WBP_SkinSelection_C")
+        if not found then log("UNLOCK: no live selector") return end
+        for _, w in pairs(found) do
+            if w:IsValid() then
+                pcall(function() w.SelectLockedSkinsOnly = false end)
+                pcall(function() w:Init() end)
+            end
+        end
+        log("UNLOCK: applied (one-shot; prefer cmsfmenu)")
+    end)
     return true
 end)
 
-RegisterConsoleCommandHandler("cmsfprobe", function()
-    ExecuteInGameThread(probe)
-    return true
-end)
-
-RegisterHook("/Script/Engine.PlayerController:ClientRestart", function()
-    ExecuteWithDelay(4000, function() ExecuteInGameThread(probe) end)
-end)
-
-ExecuteWithDelay(20000, function() ExecuteInGameThread(probe) end)
-log("CMSF Probe loaded — console command: cmsfprobe")
+log("CMSF Probe v2 — cmsfapply | cmsfmenu | cmsfskins | cmsfdump <Class> | cmsfunlock")
