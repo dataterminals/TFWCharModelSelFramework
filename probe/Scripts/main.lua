@@ -173,24 +173,64 @@ end
 -- The BP class is not in memory at script load, so RegisterHook would fail with "no
 -- UFunction with the specified name was found" (the TFWQuestItemTag lesson). Poll until
 -- the class exists, register once, then stop.
+-- Clearing the flag before Init is NOT enough: the unlock has to be re-run on every menu
+-- re-entry, which means Init's own body re-asserts it — the caller almost certainly passes
+-- it in. Corroborating: calling Init() with NO arguments yields the unlocked list, i.e. the
+-- missing parameter defaults to false.
+--
+-- So we let Init run, and if it comes back locked we flip the flag and re-enter Init bare,
+-- guarded against recursion. Crude but it uses the one call already proven to rebuild
+-- unfiltered. The real framework should override the parameter instead of re-entering —
+-- `cmsfsig` dumps Init's signature so that can be done properly.
+local reentry = false
+
+local function onInitPost(self)
+    if not UNLOCK or reentry then return end
+    local ok, w = pcall(function() return self:get() end)
+    if not ok or not w then return end
+    local locked = true
+    pcall(function() locked = w.SelectLockedSkinsOnly end)
+    if not locked then return end          -- already unfiltered, nothing to do
+    reentry = true
+    pcall(function() w.SelectLockedSkinsOnly = false end)
+    local rebuilt = pcall(function() w:Init() end)
+    reentry = false
+    log("UNLOCK: re-asserted after Init (rebuild " .. (rebuilt and "ok" or "FAILED") .. ")")
+end
+
 local hooked = false
 LoopAsync(2000, function()
     if hooked then return true end     -- true stops the loop
     local cls = StaticFindObject(WIDGET_CLASS)
     if not cls or not cls:IsValid() then return false end
     local ok = pcall(function()
-        RegisterHook(WIDGET_CLASS .. ":Init", function(self)
-            if not UNLOCK then return end
-            pcall(function()
-                local w = self:get()
-                w.SelectLockedSkinsOnly = false
-                log("UNLOCK: pre-Init flag cleared on " .. w:GetFullName())
-            end)
-        end)
+        RegisterHook(WIDGET_CLASS .. ":Init",
+            function(self)   -- pre
+                if not UNLOCK or reentry then return end
+                pcall(function() self:get().SelectLockedSkinsOnly = false end)
+            end,
+            onInitPost)
     end)
     hooked = ok
-    log("HOOK: WBP_SkinSelection_C:Init " .. (ok and "registered" or "registration failed"))
+    log("HOOK: WBP_SkinSelection_C:Init " .. (ok and "registered (pre+post)" or "registration failed"))
     return ok
+end)
+
+-- Dump Init's parameter list, so the framework can override the argument rather than
+-- re-entering the function.
+RegisterConsoleCommandHandler("cmsfsig", function()
+    ExecuteInGameThread(function()
+        local fn = StaticFindObject(WIDGET_CLASS .. ":Init")
+        if not fn or not fn:IsValid() then log("SIG: Init UFunction not found") return end
+        log("SIG: " .. fn:GetFullName())
+        local ok = pcall(function()
+            fn:ForEachProperty(function(prop)
+                log(string.format("SIG:   %s : %s", prop:GetFName():ToString(), prop:GetClass():GetFName():ToString()))
+            end)
+        end)
+        if not ok then log("SIG: ForEachProperty unavailable on this UE4SS build") end
+    end)
+    return true
 end)
 
 -- The actual skin roster is NOT DT_SkinUIData. It lives on the pawn Blueprint, in an
