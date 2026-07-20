@@ -68,8 +68,15 @@ docs/
   00-findings.md    what the datamine proves — the registry, the row struct, entitlements
   01-design.md      injection vectors, the composability constraint, open questions
   02-poc.md         the experiments that located the real roster
-  04-authoring.md   how to register a skin (mod-author facing)
   03-multiplayer.md what happens to mods in co-op — host authority, and skins as soft paths
+  04-authoring.md   how to register a skin (mod-author facing)
+```
+```
+skins/              registered skins, one folder each (skin.json)
+tools/
+  cmsf_build.py     the generator — extract, patch, repack, verify
+  skinpatch/        UAssetAPI tool: DataTable rows + Blueprint roster arrays
+runtime/CMSFUnlock/ UE4SS Lua mod that unfilters the selector
 ```
 
 ## Prior art in this workspace
