@@ -17,6 +17,12 @@ Corollary: whoever owns the table must rebase on each game patch. A patch that a
 skin row would be reverted by a stale override. `FWBehaviorLab`'s discipline applies —
 always rebuild from the current cook, never from a committed snapshot.
 
+This cuts against the intuition that CMSF's rows are at risk of being *overwritten* by
+official content. The direction is inverted: **a stale CMSF table deletes the developers'
+new rows, not the reverse.** Staleness, not collision, is the recurring hazard — and it is
+the price of Vector A+'s no-runtime-dependency design. Vector B does not pay it, which is
+the main argument for eventually migrating.
+
 ---
 
 ## Vector A — naive static pak
@@ -60,7 +66,13 @@ The name wart has a clean fix that composes on top — see Vector C.
 Slot **naming** depends on open question 1 in the findings doc. If enumeration is
 `<Character><N>` sequential, reserved rows must continue the base sequence
 (`ScavGirl5`, `ScavGirl6`, …), which conveniently also keeps them outside the entitlement
-namespace and therefore free. The PoC answers this directly.
+namespace and therefore free. If it is a full row scan, reserved rows can live under a
+`CMSF.*` namespace instead, where the developers will never collide with them. The PoC
+answers this directly — see [02-poc.md](02-poc.md) §Naming.
+
+Note that **row names are internal to CMSF**. Mods bind to the *asset path*, so CMSF can
+renumber rows during a patch rebase without breaking anything already shipped. This is what
+makes an occasional name collision cheap rather than structural.
 
 ## Vector B — runtime DataTable row injection
 
