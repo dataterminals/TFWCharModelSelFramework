@@ -487,6 +487,88 @@ RegisterConsoleCommandHandler("cmsfapi", function()
     return true
 end)
 
+-- GetAvailableSkins() -> plain Lua table of 7, GetUnlockedSkins() -> 2. Those are exactly
+-- the unfiltered and filtered menu counts, so SelectLockedSkinsOnly only chooses which
+-- getter the widget calls. Two routes could make a custom skin selectable without any pak
+-- override; this tests both, plus the table contents (logged length last time but not the
+-- elements, which is the part that decides whether a new entry can be constructed).
+
+local function dumpTable(label, t)
+    if type(t) ~= "table" then log(string.format("TBL: %s is %s", label, type(t))) return end
+    log(string.format("TBL: %s  n=%d", label, #t))
+    for i = 1, #t do
+        local v = t[i]
+        local desc = type(v)
+        pcall(function() if type(v) == "userdata" then desc = v:type() end end)
+        local extra = ""
+        pcall(function() extra = " " .. v:GetFullName() end)
+        if extra == "" then pcall(function() extra = " " .. tostring(v) end) end
+        log(string.format("TBL:   [%d] %s%s", i, desc, extra))
+    end
+end
+
+-- Route 1: call SetNewSkin directly. If UE4SS marshals a Lua string into the
+-- TSoftObjectPtr parameter, an arbitrary mesh can be applied at runtime with one call and
+-- the whole roster-write problem is moot. Borrowing an existing element is the control:
+-- if that works and the string does not, the call is fine and only marshalling is at fault.
+local function probeApply(pathArg)
+    local c = findSkinComp()
+    if not c then log("APPLY: no live FWSkinChangeComponent") return end
+    local target = pathArg or OCT
+
+    dumpTable("GetAvailableSkins", (function() local ok, r = pcall(function() return c:GetAvailableSkins() end); return ok and r or nil end)())
+    dumpTable("GetUnlockedSkins",  (function() local ok, r = pcall(function() return c:GetUnlockedSkins() end); return ok and r or nil end)())
+
+    local ok1, e1 = pcall(function() return c:SetNewSkin(target) end)
+    log(string.format("APPLY: SetNewSkin(string) ok=%s %s", tostring(ok1), ok1 and "" or tostring(e1):sub(1, 110)))
+
+    local ok2, e2 = pcall(function() return c:SetSelectedSkin(target) end)
+    log(string.format("APPLY: SetSelectedSkin(string) ok=%s %s", tostring(ok2), ok2 and "" or tostring(e2):sub(1, 110)))
+
+    -- Control: hand it a soft pointer the game already owns.
+    pcall(function()
+        local borrowed = c.SkinChoices[1]
+        local ok3, e3 = pcall(function() return c:SetNewSkin(borrowed) end)
+        log(string.format("APPLY: SetNewSkin(borrowed elem) ok=%s %s", tostring(ok3), ok3 and "" or tostring(e3):sub(1, 110)))
+    end)
+
+    local ok4 = pcall(function() c:ForceUpdateSkin() end)
+    log("APPLY: ForceUpdateSkin ok=" .. tostring(ok4))
+end
+
+RegisterConsoleCommandHandler("cmsfapply", function(fullCmd, params)
+    local p = params and params[1]
+    ExecuteInGameThread(function() probeApply(p ~= "" and p or nil) end)
+    return true
+end)
+
+-- Route 2: hook GetAvailableSkins and see what a post-callback actually receives. If the
+-- return value is reachable and settable, injecting extra skins needs no pak override at
+-- all — which is the whole argument for the runtime design.
+local hookedGet = false
+LoopAsync(3000, function()
+    if hookedGet then return true end
+    local fn = StaticFindObject("/Script/FWGameCore.FWSkinChangeComponent:GetAvailableSkins")
+    if not fn or not fn:IsValid() then return false end
+    local ok = pcall(function()
+        RegisterHook("/Script/FWGameCore.FWSkinChangeComponent:GetAvailableSkins",
+            function() end,
+            function(self, ret)
+                if HOOK_LOGGED then return end
+                HOOK_LOGGED = true      -- once only; this is called constantly
+                log("HOOKRET: post-hook fired")
+                log("HOOKRET:   self type = " .. type(self))
+                log("HOOKRET:   ret  type = " .. type(ret))
+                pcall(function() log("HOOKRET:   ret:type() = " .. tostring(ret:type())) end)
+                pcall(function() log("HOOKRET:   ret:get() type = " .. type(ret:get())) end)
+                pcall(function() local g = ret:get(); log("HOOKRET:   ret:get() n = " .. tostring(#g)) end)
+            end)
+    end)
+    hookedGet = ok
+    log("HOOK: GetAvailableSkins " .. (ok and "registered" or "registration failed"))
+    return ok
+end)
+
 RegisterConsoleCommandHandler("cmsfdump", function(fullCmd, params)
     local cls = params and params[1]
     if not cls or cls == "" then
