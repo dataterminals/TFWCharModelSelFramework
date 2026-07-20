@@ -87,6 +87,30 @@ local function apply(verbose)
     return applied, seen
 end
 
+-- Auto-report the populated list size. SkinOptions has no children until the skin panel is
+-- actually opened, and the panel draws OVER the UE4SS console — so asking for a manual
+-- command at exactly the right moment does not work in practice. Reporting on change means
+-- opening the menu is the whole interaction; the log records the number by itself.
+local lastCount = -1
+local function reportCount()
+    local found = FindAllOf(WIDGET)
+    if not found then return end
+    for _, w in pairs(found) do
+        if w:IsValid() then
+            local n = -1
+            pcall(function()
+                local kids = w.SkinOptions:GetAllChildren()
+                n = kids and #kids or -1
+            end)
+            -- Only populated selectors are interesting, and only when the number moves.
+            if n > 0 and n ~= lastCount then
+                lastCount = n
+                log(string.format("skin menu open: %d skin(s) listed", n))
+            end
+        end
+    end
+end
+
 LoopAsync(POLL_MS, function()
     if enabled then
         -- The wrapper that v0.1 was missing.
@@ -96,6 +120,7 @@ LoopAsync(POLL_MS, function()
                 quiet = true
                 log("selector unfiltered (will keep it that way)")
             end
+            reportCount()
         end)
     end
     return false      -- never stop

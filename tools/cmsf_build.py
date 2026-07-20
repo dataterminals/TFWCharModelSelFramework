@@ -116,9 +116,41 @@ def main():
     ap.add_argument("--usmap", default=os.environ.get("USMAP", DEFAULT_USMAP))
     ap.add_argument("--out", default=str(ROOT / "dist" / "CMSF"))
     ap.add_argument("--list", action="store_true", help="show registered skins and exit")
+    ap.add_argument("--pool", type=int, default=0, metavar="N",
+                    help="also reserve N empty slots per character (CMSF Core pool build). "
+                         "Reserved slots point at framework-owned paths that no asset "
+                         "occupies until a skin mod ships one there.")
+    ap.add_argument("--pool-characters", default=",".join(CHARACTERS),
+                    help="comma-separated characters to reserve pool slots for")
     args = ap.parse_args()
 
     skins = load_skins()
+
+    # Reserved pool slots. These point at framework-owned paths that NOTHING occupies until
+    # a skin mod ships an asset there — which is exactly what lets CMSF Core be prebuilt and
+    # dropped in, with no toolchain on the user's side.
+    #
+    # Open question this is built to answer first: does the game silently skip a soft path
+    # that does not resolve, or does it render an empty entry? If it skips, unclaimed slots
+    # cost nothing and no pruning is needed. If it renders, CMSFUnlock must hide them.
+    for char in [c.strip() for c in args.pool_characters.split(",") if c.strip()]:
+        if char not in CHARACTERS:
+            sys.exit(f"--pool-characters: unknown character {char!r}")
+        for i in range(args.pool):
+            slot = f"{i:02d}"
+            base = f"/Game/CMSF/{char}/{slot}"
+            skins.setdefault(char, []).append({
+                "character": char,
+                "id": slot,
+                "row": f"CMSF.{char}.{slot}",
+                "name": f"CMSF Slot {slot}",
+                "description": "Empty CMSF slot - install a skin mod that claims it.",
+                "mesh": f"{base}/SK_CMSF_{char}_{slot}.SK_CMSF_{char}_{slot}",
+                "icon": f"{base}/T_CMSF_{char}_{slot}.T_CMSF_{char}_{slot}",
+                "_src": "(reserved pool slot)",
+                "_pool": True,
+            })
+
     total = sum(len(v) for v in skins.values())
 
     if args.list or total == 0:
