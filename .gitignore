@@ -11,5 +11,9 @@ dist/**/*.pak
 dist/**/*.utoc
 dist/**/*.ucas
 
+# .NET build output
+bin/
+obj/
+
 __pycache__/
 *.pyc
