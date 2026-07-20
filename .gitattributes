@@ -1,0 +1,14 @@
+# Normalize text to LF in the repo; keep binaries untouched.
+* text=auto eol=lf
+
+*.lua   text eol=lf
+*.py    text eol=lf
+*.md    text eol=lf
+*.txt   text eol=lf
+*.json  text eol=lf
+
+*.zip   binary
+*.png   binary
+*.pak   binary
+*.utoc  binary
+*.ucas  binary

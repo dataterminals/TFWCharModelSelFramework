@@ -1,0 +1,15 @@
+# Extracted game assets are copyright-derived — never commit them.
+build/
+extracted/
+*.uasset
+*.uexp
+*.ubulk
+*.usmap
+
+# Built mod artifacts (attach to releases instead)
+dist/**/*.pak
+dist/**/*.utoc
+dist/**/*.ucas
+
+__pycache__/
+*.pyc
