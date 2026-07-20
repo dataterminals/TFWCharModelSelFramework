@@ -126,7 +126,66 @@ This gets a working, composable, DLC-free, custom-portrait framework with **no r
 dependency at all**, and leaves the pretty-names problem to an optional component that
 cannot take the system down with it.
 
-## Post-PoC — the selector filter changes the calculus
+## REVISION 2026-07-20 — the target moved
+
+Everything above targets `DT_SkinUIData`. **That was the wrong asset.** The PoC proved it:
+our two rows reached the live table (35 rows confirmed at runtime) and the selector still
+offered exactly the vanilla set.
+
+The roster is `FWSkinChangeComponent.SkinChoices` / `.LockedSkinChoices` on each
+`BP_Player_<Char>` — see [00-findings.md](00-findings.md) §7. `DT_SkinUIData` only supplies
+the display name and icon, keyed off the mesh path.
+
+**Vectors A / A+ / B as written above are obsolete** — they all solve "get a row into a
+DataTable", which is not the problem. What survives is more useful than what it replaces:
+
+### What the correction buys
+
+- **The composability constraint is gone.** The reason A+ existed was that a pak override
+  clobbers a whole DataTable, so only one artifact could own it. Appending to a *reflected
+  array at runtime* has no such limit — every mod's entries coexist. **No reserved slot
+  pool, no fixed pool size, no slot-allocation registry, no "CMSF Slot 05" naming wart.**
+- **The native dependency is gone.** A `UDataTable`'s `RowMap` is raw row memory, which is
+  why Vector B needed TFWWorkbench's C++ `AddDataTableRow`. `SkinChoices` is an ordinary
+  `TArray<FSoftObjectPath>` UPROPERTY, reachable by the same Lua reflection `FWStealth`
+  already uses here. **No TFWWorkbench, no `-894` ABI pin, no unrebuildable `main.dll`.**
+- **The staleness hazard is gone.** Nothing gets pak-overridden, so CMSF no longer deletes
+  rows a patch adds, and no longer owes a rebase every patch.
+
+### The shape it wants now
+
+```
+UE4SS Lua mod, at runtime:
+  1. append each registered skin's mesh path -> FWSkinChangeComponent.SkinChoices
+  2. clear WBP_SkinSelection.SelectLockedSkinsOnly so the selector shows that array
+  3. ensure DT_SkinUIData has a row whose Skin path matches, for name + icon
+Skin mods ship: an ordinary pak (own mesh + icon at own paths) + a small manifest.
+```
+
+Step 3 is the only part still wanting a table write. It may not need one — if the selector
+falls back gracefully when no row matches, a skin could ship nameless-but-working, with the
+name applied by the `TFWQuestItemTag` live-TextBlock trick instead.
+
+### A side effect worth having
+
+Step 2 makes the **shipped base skins selectable at all** — which they currently are not.
+Today, picking a DLC skin strands you there until you die in a raid and get randomly
+reassigned. That is a real annoyance CMSF would fix incidentally, independent of any custom
+skin.
+
+### Open before building
+
+- Can Lua **append** to a `TArray<FSoftObjectPath>`, or only mutate existing elements? The
+  probe's `cmsfadd` tests overwrite-in-place first because that is likelier to work; append
+  is what the framework actually needs.
+- Is the component **per-pawn-instance** (patch each spawn) or is the class default enough?
+  `bReplicates = true` means skin state syncs — check against
+  [03-multiplayer.md](03-multiplayer.md) before assuming client-side-only.
+- Does `LockedSkinChoices` gate on a tag the player **owns**, and is ownership
+  platform-resolved? If a tag can be granted locally, that is a second, tidier route than
+  disabling the filter.
+
+## Superseded — the selector filter changes the calculus
 
 The first in-game run (2026-07-20) showed no new skin, and the reason is not the
 enumeration question this PoC was built to answer. It is that **the skin selector only

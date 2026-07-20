@@ -80,13 +80,26 @@ local function probeTable()
         return
     end
 
-    local seen, total = {}, 0
+    -- UE4SS hands back FName objects, not strings. tostring() on one yields a userdata
+    -- repr, not the name — which silently turned every lookup below into a false ABSENT
+    -- on the first run even though the row count proved the rows were there. Always
+    -- :ToString() an FName before comparing.
+    local function nameStr(n)
+        if type(n) == "string" then return n end
+        local ok, s = pcall(function() return n:ToString() end)
+        if ok and type(s) == "string" then return s end
+        return tostring(n)
+    end
+
+    local seen, total, sample = {}, 0, {}
     for _, n in ipairs(names) do
-        local s = tostring(n)
+        local s = nameStr(n)
         total = total + 1
         seen[s] = true
+        if total <= 3 then sample[#sample + 1] = s end
     end
     log(string.format("TABLE: %d rows (via %s)", total, why))
+    log("TABLE: first rows = " .. table.concat(sample, ", "))   -- sanity-check the conversion
 
     for want, _ in pairs(WANT) do
         log(string.format("TABLE:   %-16s %s", want, seen[want] and "PRESENT" or "ABSENT"))
@@ -178,6 +191,102 @@ LoopAsync(2000, function()
     hooked = ok
     log("HOOK: WBP_SkinSelection_C:Init " .. (ok and "registered" or "registration failed"))
     return ok
+end)
+
+-- The actual skin roster is NOT DT_SkinUIData. It lives on the pawn Blueprint, in an
+-- FWSkinChangeComponent holding two reflected arrays:
+--   SkinChoices        TArray<FSoftObjectPath>            the free / random-respawn pool
+--   LockedSkinChoices  TMap<FGameplayTag, FSoftObjectPath> the entitlement-gated menu
+-- SelectLockedSkinsOnly picks which one feeds the selector. DT_SkinUIData only supplies
+-- display name + icon. These are ordinary UPROPERTYs, so unlike a DataTable RowMap they
+-- are reachable from Lua — which is what makes a pure-Lua framework plausible.
+local OCT = "/Game/Character/Scavengers/Female/Skins/OCT/SK_SCV_FL_OCT.SK_SCV_FL_OCT"
+
+local function findSkinComp()
+    local comps = FindAllOf("FWSkinChangeComponent")
+    if not comps then return nil end
+    for _, c in pairs(comps) do
+        if c:IsValid() then
+            local owner = "?"
+            pcall(function() owner = c:GetFullName() end)
+            if owner:find("Girl", 1, true) or owner:find("Default__", 1, true) == nil then
+                return c, owner
+            end
+        end
+    end
+    return nil
+end
+
+local function pathOf(v)
+    local out = "?"
+    pcall(function()
+        if v.AssetPath then
+            out = tostring(v.AssetPath.PackageName:ToString())
+        elseif v.AssetPathName then
+            out = tostring(v.AssetPathName:ToString())
+        else
+            out = tostring(v)
+        end
+    end)
+    return out
+end
+
+local function dumpComp()
+    local c, owner = findSkinComp()
+    if not c then log("COMP: no live FWSkinChangeComponent (be in a match / ready room)") return end
+    log("COMP: " .. tostring(owner))
+
+    local ok = pcall(function()
+        local arr = c.SkinChoices
+        local n = #arr
+        log(string.format("COMP: SkinChoices n=%d", n))
+        for i = 1, n do
+            log(string.format("COMP:   [%d] %s", i, pathOf(arr[i])))
+        end
+    end)
+    if not ok then log("COMP: could not read SkinChoices") end
+
+    pcall(function()
+        local m = c.LockedSkinChoices
+        log("COMP: LockedSkinChoices type=" .. type(m))
+    end)
+end
+
+-- Prove the linkage: make an existing free slot point at the cut OCT mesh. If the selector
+-- then shows "October" (the DT_SkinUIData row we appended for exactly that mesh path), the
+-- whole model is confirmed — roster array drives availability, table drives presentation.
+-- Overwrite in place rather than append, because mutating an existing element is far more
+-- likely to work from Lua than growing a TArray of structs.
+local function addOct()
+    local c, owner = findSkinComp()
+    if not c then log("ADD: no live FWSkinChangeComponent") return end
+
+    local before, after, okw = "?", "?", false
+    pcall(function()
+        local arr = c.SkinChoices
+        local n = #arr
+        if n < 1 then log("ADD: SkinChoices empty") return end
+        before = pathOf(arr[n])
+        -- Shape A: assign the whole soft path via its string field
+        okw = pcall(function() arr[n].AssetPath.PackageName = FName(OCT:match("^(.*)%.")) end)
+        if not okw then
+            -- Shape B: some builds expose AssetPathName directly
+            okw = pcall(function() arr[n].AssetPathName = FName(OCT) end)
+        end
+        after = pathOf(arr[n])
+    end)
+    log(string.format("ADD: slot write ok=%s  %s -> %s", tostring(okw), before, after))
+    log("ADD: now reopen the skin menu (run cmsfunlock first if you have not)")
+end
+
+RegisterConsoleCommandHandler("cmsfcomp", function()
+    ExecuteInGameThread(dumpComp)
+    return true
+end)
+
+RegisterConsoleCommandHandler("cmsfadd", function()
+    ExecuteInGameThread(addOct)
+    return true
 end)
 
 RegisterConsoleCommandHandler("cmsfunlock", function()

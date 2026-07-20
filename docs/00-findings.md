@@ -31,7 +31,17 @@ without an experiment.
 
 ---
 
-## 1. There is exactly one skin registry **[VERIFIED]**
+## 1. ~~There is exactly one skin registry~~ — CORRECTED 2026-07-20
+
+> **This section's headline was wrong.** `DT_SkinUIData` is the **presentation** table —
+> it supplies a skin's display name and icon. It is **not** the roster, and appending rows
+> to it does not make a skin available. The real roster lives on each character's pawn
+> Blueprint; see **§7**. Everything below about the table's *structure* is accurate and
+> still matters, because a CMSF skin does need a row here to be named and pictured. It is
+> necessary, not sufficient.
+>
+> Proven in-game: with our two extra rows confirmed live in the table (35 rows), the
+> selector still offered exactly the vanilla set.
 
 `/Game/FW/Player/Data/DT_SkinUIData` — 33 rows, RowStruct `Class'SkinDetails'` from
 `/Script/FWGameCore`.
@@ -234,6 +244,73 @@ It is invisible purely because no row references it.
 
 This proves the negative direction of the thesis — **a mesh without a row is unreachable**
 — and hands us a free PoC subject. See [02-poc.md](02-poc.md).
+
+## 7. The real registry — `FWSkinChangeComponent` on the pawn Blueprint **[VERIFIED]**
+
+Every playable character's pawn Blueprint (`/Game/FW/Player/Class/BP_Player_<Char>`) carries
+an **`FWSkinChangeComponent`** whose component template holds the actual roster:
+
+| Property | Type | Role |
+|---|---|---|
+| `SkinChoices` | `TArray<FSoftObjectPath>` | free pool — the random respawn roll. **Not menu-selectable by default.** |
+| `LockedSkinChoices` | `TMap<FGameplayTag, FSoftObjectPath>` | entitlement-gated — **this is what the selector shows** |
+| `bReplicates` | bool | `true` |
+
+`BP_Player_Girl`'s, in full:
+
+```
+SkinChoices (5)
+  /Game/Character/Scavengers/Female/SK_SCV_FL      .SK_SCV_FL
+  /Game/Character/Scavengers/Female/SK_SCV_FL1     .SK_SCV_FL1
+  /Game/Character/Scavengers/Female/SK_SCV_FL2     .SK_SCV_FL2
+  /Game/Character/Scavengers/Female/SK_SCV_FL3     .SK_SCV_FL3
+  /Game/Character/Scavengers/Female/SK_SCV_FL4     .SK_SCV_FL4
+
+LockedSkinChoices (3)
+  Entitlement.Skin.Girl.BlindFang       -> Skins/SPT/SK_SCV_FL_SPT
+  Entitlement.Skin.Girl.Dec2025         -> Skins/DEC/SK_FL_SCV_DEC
+  Entitlement.Skin.Girl.April2026.DSQ   -> Skins/DSQ/SK_SCV_FL_DSQ
+```
+
+Across all six characters:
+
+| Pawn | `SkinChoices` | `LockedSkinChoices` |
+|---|---|---|
+| `BP_Player_BagMan` | 4 | 1 |
+| `BP_Player_Girl` | 5 | 3 |
+| `BP_Player_Gunhead` | 1 | 3 |
+| `BP_Player_MaskMan` | 3 | 3 |
+| `BP_Player_OldMan` | 2 | 2 |
+| `BP_Player_Shaman` | 1 | 3 |
+
+### This explains every observation
+
+`WBP_SkinSelection.SelectLockedSkinsOnly` selects **which array feeds the selector**.
+Measured live on 2026-07-20:
+
+| `SelectLockedSkinsOnly` | `SkinOptions` children | Composition |
+|---|---|---|
+| `true` (default) | **2** | owned `LockedSkinChoices` only |
+| `false` (via probe) | **7** | 5 `SkinChoices` + 2 owned locked |
+
+That accounts exactly for the reported behaviour: the menu offers only DLC skins; base
+skins are unreachable there and surface only through the random respawn roll, which draws
+from `SkinChoices`.
+
+### Why this is good news
+
+`SkinChoices` and `LockedSkinChoices` are **ordinary reflected UPROPERTYs on a
+UActorComponent**, not a `UDataTable`'s raw `RowMap`. So they are reachable from UE4SS Lua
+by the same reflection that `FWStealth` already uses on this game — **no native
+`AddDataTableRow` primitive is required**, and the TFWWorkbench dependency (with its `-894`
+ABI pin and unrebuildable `main.dll`) drops out of the design entirely.
+
+### Loose end
+
+`DT_SkinUIData` contains `Skin.Girl.MAY` (mesh `Skins/MAY/SK_SCV_FL_May`), but
+`LockedSkinChoices` has **no** May entry — only 3 of the table's 4 girl DLC skins. Either
+May is wired up by some other path, or it shipped in the table ahead of the component.
+Worth understanding before assuming `LockedSkinChoices` is the complete gate.
 
 ## 6. What is still unknown
 
