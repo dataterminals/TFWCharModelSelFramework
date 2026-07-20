@@ -3,9 +3,27 @@
 A framework for **appending** player-character skins to *The Forever Winter*'s
 character-select screen, instead of overwriting the finite set of slots the game ships with.
 
-**Status: research complete, PoC not yet built.** The feasibility question is settled far
-enough to build on — see [docs/00-findings.md](docs/00-findings.md) for the evidence. What
-is *not* yet settled is the injection mechanism; see [docs/01-design.md](docs/01-design.md).
+**Status: v0.1 — working and verified in-game.** Custom skins appear in the character-select
+screen with their own name, description and portrait, alongside the vanilla ones.
+
+```bash
+python tools/cmsf_build.py --list     # what is registered
+python tools/cmsf_build.py            # -> dist/CMSF/CMSF_9_P.{pak,utoc,ucas}
+```
+
+Two pieces:
+
+| | |
+|---|---|
+| **the generated pak** | appends each registered skin's mesh to the character's roster, and a row to `DT_SkinUIData` for its name/icon |
+| **`CMSFUnlock`** (UE4SS Lua) | unfilters the selector, which vanilla restricts to entitlement-gated DLC skins |
+
+Adding a skin: drop a folder under `skins/` and re-run the build — see
+[docs/04-authoring.md](docs/04-authoring.md).
+
+`CMSFUnlock` is worth having by itself: it makes the game's **own** base skins selectable,
+which vanilla does not allow. Normally, picking a DLC skin strands you there until you die
+in a raid and get randomly reassigned.
 
 > Public-facing copy (Nexus page, release notes, announcement) is deliberately not drafted
 > here. This README is the technical record.
@@ -49,7 +67,8 @@ and icon at their own paths, plus a small manifest. No identity games, no collis
 docs/
   00-findings.md    what the datamine proves — the registry, the row struct, entitlements
   01-design.md      injection vectors, the composability constraint, open questions
-  02-poc.md         the one-variable experiment that settles the last unknown
+  02-poc.md         the experiments that located the real roster
+  04-authoring.md   how to register a skin (mod-author facing)
   03-multiplayer.md what happens to mods in co-op — host authority, and skins as soft paths
 ```
 

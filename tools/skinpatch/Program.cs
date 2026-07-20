@@ -41,7 +41,7 @@ class Program
 
         // Blueprint roster modes operate on a BlueprintGeneratedClass, which has no
         // DataTableExport — so they must run before the DataTable lookup below.
-        bool isBpMode = mode == "bpskins" || mode == "bpset" || mode == "bpexports";
+        bool isBpMode = mode == "bpskins" || mode == "bpset" || mode == "bpadd" || mode == "bpexports";
 
         if (mode == "bpexports")
         {
@@ -118,7 +118,7 @@ class Program
         // not DT_SkinUIData. These modes work on that array. `bpskins` lists it;
         // `bpset` repoints one entry at another mesh, which is the minimal way to prove
         // "roster array drives availability" without needing a TArray append.
-        if (mode == "bpskins" || mode == "bpset")
+        if (mode == "bpskins" || mode == "bpset" || mode == "bpadd")
         {
             var comp = asset.Exports.OfType<NormalExport>()
                 .FirstOrDefault(e => e.Data.Any(p => S(p.Name) == "SkinChoices"));
@@ -135,6 +135,51 @@ class Program
                 Console.WriteLine($"  [{i}] {Describe(arr.Value[i])}");
 
             if (mode == "bpskins") return 0;
+
+            // bpadd <in> <usmap> <out> <"/Package/Path.Object"> ...
+            // Appends to SkinChoices. New elements clone the template element's Name and
+            // Ancestry, which unversioned (usmap-driven) serialization depends on.
+            if (mode == "bpadd")
+            {
+                if (args.Length < 5) { Console.WriteLine("usage: skinpatch bpadd <in> <usmap> <out> <path>..."); return 1; }
+                var outAdd = args[3];
+                var paths = args.Skip(4).ToList();
+
+                var tpl0 = arr.Value.OfType<SoftObjectPropertyData>().FirstOrDefault();
+                if (tpl0 == null) { Console.WriteLine("ABORT: SkinChoices has no SoftObject element to use as a template"); return 3; }
+
+                var list = arr.Value.ToList();
+                int before = list.Count;
+                var existing = new HashSet<string>(
+                    arr.Value.OfType<SoftObjectPropertyData>().Select(x => x.Value.ToString()),
+                    StringComparer.OrdinalIgnoreCase);
+
+                foreach (var addPath in paths)
+                {
+                    int d = addPath.LastIndexOf('.');
+                    if (d < 0) { Console.WriteLine($"ABORT: expected /Package/Path.Object, got: {addPath}"); return 1; }
+                    string pk = addPath.Substring(0, d), ob = addPath.Substring(d + 1);
+
+                    var sp = new FSoftObjectPath(
+                        new FTopLevelAssetPath(FName.FromString(asset, pk), FName.FromString(asset, ob)),
+                        FString.FromString(""));
+
+                    if (existing.Contains(sp.ToString()))
+                    {
+                        Console.WriteLine($"  = already present, skipping: {addPath}");
+                        continue;
+                    }
+                    list.Add(new SoftObjectPropertyData(tpl0.Name) { Ancestry = tpl0.Ancestry, Value = sp });
+                    existing.Add(sp.ToString());
+                    Console.WriteLine($"  + {addPath}");
+                }
+
+                arr.Value = list.ToArray();
+                Console.WriteLine($"SkinChoices {before} -> {arr.Value.Length}");
+                asset.Write(outAdd);
+                Console.WriteLine($"wrote {outAdd}");
+                return 0;
+            }
 
             // bpset <in> <usmap> <out> <index> <"/Package/Path.Object">
             if (args.Length < 6) { Console.WriteLine("usage: skinpatch bpset <in> <usmap> <out> <index> <path>"); return 1; }
