@@ -80,6 +80,22 @@ a row with no roster entry is equally invisible.
 `CMSFUnlock` supplies the third piece: the selector normally shows only entitlement-gated
 DLC skins, so it clears that filter.
 
+## What ships, and what must not
+
+`cmsf.exe` is self-contained (no .NET runtime needed), but two files sit beside it that
+**CMSF must not redistribute**:
+
+| File | Why not ours to ship |
+|---|---|
+| `ForeverWinter-*.usmap` | decoded from the game's own type layout — shipping it redistributes part of the game. Users dump their own with UE4SS (`Ctrl+Numpad6`, or a Lua `DumpUSMAP()` call), once per game version. |
+| `oo2core_9_win64.dll` | proprietary Oodle (RAD/Epic). **retoc provisions this itself** — observed appearing next to the tool during a build, and it is not present in the game install. |
+
+Two consequences worth stating on a mod page: **the first run may need an internet
+connection** for retoc to fetch Oodle, and because `cmsf.exe` is unsigned, Windows
+SmartScreen will show "unknown publisher" once — a one-click *More info → Run anyway*.
+
+`retoc.exe` itself is MIT and can be redistributed with attribution.
+
 ## Gotchas
 
 - **Object name after the dot.** `/Game/X/SK_Foo.SK_Foo`, not `/Game/X/SK_Foo`. The game
