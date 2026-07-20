@@ -143,10 +143,18 @@ def main():
                 "character": char,
                 "id": slot,
                 "row": f"CMSF.{char}.{slot}",
-                "name": f"CMSF Slot {slot}",
-                "description": "Empty CMSF slot - install a skin mod that claims it.",
+                "name": f"CMSF Slot {slot} (empty)",
+                "description": "Nothing is installed here yet. Install a skin mod that "
+                               "claims this slot, or hide empty slots with CMSFUnlock.",
                 "mesh": f"{base}/SK_CMSF_{char}_{slot}.SK_CMSF_{char}_{slot}",
-                "icon": f"{base}/T_CMSF_{char}_{slot}.T_CMSF_{char}_{slot}",
+                # Vanilla "locked" portrait rather than a slot-specific texture that will
+                # not exist until claimed. An unresolvable icon renders as a blank white
+                # tile that reads as breakage; this makes an unclaimed slot look deliberate.
+                # Purely a fallback for when CMSFUnlock's pruning is absent or fails —
+                # normally these are hidden before the player ever sees them.
+                "icon": "/Game/UI/Textures/MainMenu/Menu/"
+                        "T_Menu_PickCharacter_Portrait_LockedV2."
+                        "T_Menu_PickCharacter_Portrait_LockedV2",
                 "_src": "(reserved pool slot)",
                 "_pool": True,
             })
