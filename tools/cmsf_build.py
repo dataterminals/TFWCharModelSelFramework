@@ -52,9 +52,12 @@ BP_DIR = "ForeverWinter/Content/FW/Player/Class"
 TABLE_REL = "ForeverWinter/Content/FW/Player/Data/DT_SkinUIData.uasset"
 
 AES = "0x84B2244BE0AF90C22976D739FA0665569219F4CEA119CEA37C81F2D9ABEE4795"
-DEFAULT_RETOC = r"H:\Github Repositories\UnkillablesRebalanceFix\tools\retoc\retoc.exe"
-DEFAULT_USMAP = r"H:\Github Repositories\forever-winter-datamine\datamine\mappings\ForeverWinter-5.4.2.usmap"
-DEFAULT_PAKS = r"H:\SteamLibrary\steamapps\common\The Forever Winter\Windows\ForeverWinter\Content\Paks"
+# Dev-machine conveniences only — override with --retoc/--usmap/--paks or the
+# RETOC/USMAP/FW_PAKS env vars. (These were H: until the repos moved to D:; a wrong default
+# fails loudly at the exists-check below, not silently.)
+DEFAULT_RETOC = r"D:\Github Repositories\HeavyRifleRebalanceFix\tools\retoc\retoc.exe"
+DEFAULT_USMAP = r"D:\Github Repositories\forever-winter-datamine\datamine\mappings\ForeverWinter-5.4.2.usmap"
+DEFAULT_PAKS = r"D:\SteamLibrary\steamapps\common\The Forever Winter\Windows\ForeverWinter\Content\Paks"
 
 # Load order: the token between the LAST TWO underscores of a _P.pak is parsed as the chunk
 # version (N -> N+1, PakOrder += 100*CVN). A numeric PREFIX is inert. Under MO2 the plugin

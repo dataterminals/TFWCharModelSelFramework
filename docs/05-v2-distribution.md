@@ -183,11 +183,12 @@ Cheapest and most decisive first. Each rung can kill the design before the next 
 
 **Offline (no game launch, minutes):**
 
-1. **From-scratch package authoring.** Hand-build a `UStringTable` with UAssetAPI, round-trip
-   through `retoc to-zen` and back; assert the export survives and the chunk id derives from
-   `FolderName`. **This gates everything** — see the tooling gap below.
+1. ~~**String-table authorability.**~~ **PASSED 2026-07-21** — cloned the game's own
+   `ST_FW_UI_Skins`, rewrote it, and round-tripped it through `retoc to-zen` and back with
+   the entries intact. See "Tooling" below, including the export-rename gotcha.
 2. **Placeholder mesh authorability.** Same round-trip for a CMSF-authored mesh referencing
-   the game skeleton by import.
+   the game skeleton by import. (Unlike the string table, there is no obvious minimal
+   template to clone — this is the remaining offline unknown.)
 
 **In-game, static name channel:**
 
@@ -222,13 +223,48 @@ Cheapest and most decisive first. Each rung can kill the design before the next 
     roll entirely**, which would retire this whole document's central constraint. Chase the
     `Skin.Girl.MAY` loose end ([00-findings.md](00-findings.md) §the May anomaly) alongside it.
 
-## Known tooling gap
+## Tooling: probe 1 is **PASSED** (2026-07-21)
 
-**No from-scratch package authoring exists anywhere in the toolchain.** `skinpatch`,
-`tools/cmsf/Patcher.cs`, and the skin-mods `fwrepath` all begin `new UAsset(existingFile)`
-and edit in place. v0.2 requires *synthesized* `UStringTable` packages, which is a new
-tooling tier rather than an increment. Probe 1 exists to price it before anything else is
-spent.
+The concern was that no from-scratch package authoring exists anywhere in the toolchain —
+`skinpatch`, `tools/cmsf/Patcher.cs` and the skin-mods `fwrepath` all begin
+`new UAsset(existingFile)` and edit in place, so synthesizing `UStringTable` packages looked
+like a new tooling tier.
+
+**It isn't, because the game ships a string table to clone.** `ST_FW_UI_Skins`
+([00-findings.md:53](00-findings.md#L53)) is a real cooked `UStringTable`, and the base skin
+rows already reference it in exactly the form v0.2 needs
+([00-findings.md:86](00-findings.md#L86)). So the existing edit-in-place pattern covers it —
+extract the game's table, clear it, write our own entries, save to a CMSF path.
+
+Verified end to end, offline, on game build as of this date:
+
+| Step | Result |
+|---|---|
+| `retoc to-legacy -f ST_FW_UI_Skins` from the live cook | 1 asset extracted (665 B `.uasset` + 2414 B `.uexp`) |
+| UAssetAPI 1.1.0 load | resolved as `StringTableExport`, class `StringTable`, namespace `ST_FW_UI_Names`, **42 entries** |
+| clear + set namespace + add entries + `asset.Write()` | wrote a 665 B `.uasset` + 113 B `.uexp` |
+| reload the written asset | entries intact |
+| `retoc to-zen` at `/Game/CMSF/Girl/05/` | **produced a valid pak trio** |
+| `to-legacy` back, then reload | namespace `CMSF.Girl.05`, `Name` and `Desc` intact |
+
+So the name/description channel is buildable with the tools already in the repo. What remains
+unproven is whether the *game* resolves a cross-pak string-table reference and honours an
+override — probes 3–5, which need a launch.
+
+### Two findings from running it
+
+**The export object is not renamed by renaming the file.** After saving the clone as
+`ST_CMSF_Girl_05.uasset`, the export was still named `ST_FW_UI_Skins`. Since a `TableId` is
+`/Package/Path.ObjectName`, a clone whose object keeps the template's name must either be
+referenced as `/Game/CMSF/Girl/05/ST_CMSF_Girl_05.ST_FW_UI_Skins` or — better — have its
+export renamed at generation time. This is the
+[04-authoring.md](04-authoring.md) §Gotchas "object name after the dot" rule biting in a new
+place. **The generator must rename the export, not just the file.**
+
+**`to-legacy` on a mod pak needs the game's global container staged beside it.** Alone it
+fails with `FIoChunkId ... ScriptObjects not found in any containers`. This is already
+handled in [cmsf_build.py](../tools/cmsf_build.py) (it copies `global.utoc`/`global.ucas`
+into the verify directory) — worth knowing before it looks like a corrupt pak.
 
 ## Rejected
 
