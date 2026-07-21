@@ -162,18 +162,21 @@ framework release without breaking existing claims.
 Keep the pool **small**. Two independent reasons, and the second is the binding one:
 
 1. Every baked slot is a respawn-roll participant even with placeholders absorbing it.
-2. **Every baked slot costs ~9 MB.** A resolvable placeholder is a full clone of the
-   character's base mesh — measured at 8.65 MB for ScavGirl (probe 2). Pool size is
-   therefore a download-size decision, not just a namespace decision:
+2. **Every baked slot costs a full base-mesh clone — 10.4 MB on average.** Measured across
+   all six characters (probe 2), so pool size is a download-size decision, not just a
+   namespace decision:
 
-   | Pool | Slots | Framework pak |
+   | Pool depth | Slots | Framework pak |
    |---|---|---|
-   | 2 per character | 12 | ~104 MB |
-   | 4 per character | 24 | ~208 MB |
-   | 8 per character | 48 | ~415 MB |
+   | 1 per character | 6 | ~62 MB |
+   | 2 per character | 12 | ~125 MB |
+   | 4 per character | 24 | ~250 MB |
+   | 8 per character | 48 | ~499 MB |
 
    All of it duplicating meshes the user already has on disk. Demand-size the pool (current
-   claims + small headroom); do not reserve generously.
+   claims + small headroom); do not reserve generously. Note the pool need not be uniform —
+   depth is per character, and demand is not: ScavGirl carries most skin mods, Gunhead and
+   Shaman ship one base skin each and are the two most expensive to reserve.
 
 ## What v0.1 keeps
 
@@ -320,12 +323,28 @@ exists to prevent.
 
 ### The finding that actually matters
 
-**A placeholder costs a full mesh clone: ~8.65 MB per slot, per character.** Nothing in the
-round-trip shrinks it — the `.uexp` is the render data, and it survives byte-identical
-because it has to.
+**A placeholder costs a full mesh clone.** Nothing in the round-trip shrinks it — the
+`.uexp` *is* the render data, and it survives byte-identical because it has to.
 
-Incidental confirmation of scale from the same extract: `SK_SCV_FL_OCT` is 50.9 MB,
+Measured for every character's `SkinChoices[0]`, the mesh a placeholder would clone
+(`skinpatch bpskins` for the paths, `retoc to-legacy` for the bytes):
+
+| Character | Base mesh | Size |
+|---|---|---|
+| OldMan | `GH_OldMan` | 6.62 MB |
+| BagMan | `SK_SCV_BGM` | 8.11 MB |
+| Girl | `SK_SCV_FL` | 8.25 MB |
+| MaskMan | `SK_SCV_MSKM` | 12.41 MB |
+| Shaman | `SK_SCV_SHM` | 13.40 MB |
+| Gunhead | `SK_SCV_GHD_V01` | 13.62 MB |
+| | **one slot, all six** | **62.39 MB** |
+
+Incidental confirmation of scale from the same extracts: `SK_SCV_FL_OCT` is 50.9 MB,
 `SK_SCV_FL_DSQ` 15.3 MB, `SK_SCV_FL_SPT` 12.7 MB. Base meshes are the *cheap* end.
+
+Note the inverse correlation with demand: Gunhead and Shaman have the **smallest** rosters
+(one base skin each, [00-findings.md:277](00-findings.md#L277)) and the **largest** meshes,
+so reserving uniformly spends the most bytes on the characters least likely to be claimed.
 
 This does not kill v0.2. It does mean the pool must be demand-sized to single digits per
 character (see "The trade"), and it materially raises the value of rung 10 — see below.
