@@ -77,9 +77,21 @@ paks survive every framework rebase untouched.
    portrait** for any slot, since either would silently make that slot unprunable.
 
    `python tools/cmsf_framework.py --slots 32`  ->  `dist/framework/CMSF_Core_9_P.*`
-2. **Author tool.** Takes a mesh + portrait + `skin.json` + a claimed slot, emits the three
-   packages. `build_probe7.py`'s author half is the prototype. This is what becomes
-   `cmsf.exe` for authors — see the Nexus `.exe` constraint in the repo's prior art.
+2. ~~**Author tool.**~~ **Done** — [tools/cmsf_author.py](../tools/cmsf_author.py). Takes a
+   `skin.json` plus a claimed slot and emits exactly three packages at the slot's frozen
+   paths. Sources may be `/Game/` paths cloned out of the live cook, or the author's own
+   cooked `.uasset` files. Still to do: package it as `cmsf.exe` for authors — see the Nexus
+   `.exe` constraint in the repo's prior art.
+
+   **The portrait is mandatory, and the tool enforces it.** Rung 9 decides a slot is
+   unclaimed by checking whether its icon resolves to the slot's own path, so a claim
+   shipping no portrait is not merely plain — it is *pruned*, invisible, indistinguishable
+   from not being installed. That is the one authoring mistake that yields a clean build and
+   a missing skin, so it is a hard error at build time.
+
+   The verify pass also fails the build if the pak contains **anything** outside
+   `/Game/CMSF/<Char>/<NN>/`. "Authors never ship `DT_SkinUIData` or `BP_Player_*`" is now
+   mechanically enforced rather than remembered.
 3. **Slot registry.** A public list mapping `<Char>/<NN>` → who claimed it, so authors do not
    collide. Design question, not a technical one.
 4. ~~**Rung 9, optional.**~~ **Done** — shipped in `CMSFUnlock`. It derives each slot's

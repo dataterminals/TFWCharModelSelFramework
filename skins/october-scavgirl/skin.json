@@ -3,5 +3,6 @@
   "name": "October",
   "description": "A cut Scav Girl skin that ships with the game but was never wired into the selector.",
   "mesh": "/Game/Character/Scavengers/Female/Skins/OCT/SK_SCV_FL_OCT.SK_SCV_FL_OCT",
-  "icon": "/Game/UI/Textures/MainMenu/Menu/T_Menu_PickCharacter_Portrait_ScavGirl.T_Menu_PickCharacter_Portrait_ScavGirl"
+  "icon": "/Game/UI/Textures/MainMenu/Menu/T_Menu_PickCharacter_Portrait_DLC04_Scavgirl.T_Menu_PickCharacter_Portrait_DLC04_Scavgirl",
+  "slot": "00"
 }
