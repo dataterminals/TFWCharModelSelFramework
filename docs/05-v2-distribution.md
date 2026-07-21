@@ -1,8 +1,13 @@
 # v0.2 — moving the build to the author
 
-**Status: design, not built.** v0.1 ships and works; nothing here is implemented. This
-document records the constraint that shapes any redesign, the architecture chosen against
-it, and the probe order that would validate it.
+**Status: the name channel is PROVEN; the framework is not built.** Probes 1–5 pass
+(2026-07-21). A CMSF-authored string table builds, the game resolves it cross-pak on a cold
+first open, and a higher-load-order pak overrides it — which is the author channel itself,
+and was the design's riskiest unknown.
+
+What remains unproven is the **respawn constraint** (rung 6) and the end-to-end slot claim
+(rungs 7–8). v0.1 still ships. This document records the constraint that shapes the
+redesign, the architecture chosen against it, and the probe order validating it.
 
 ## The goal
 
@@ -227,8 +232,16 @@ remaining gate on the shipping design.
    **No `Init()` retrigger is needed**, so the on-demand load lands in time and the partial
    failure this rung was written to catch does not occur. Cross-pak is the realistic v0.2
    shape, so this is the rung that matters more than 3.
-5. **ST override by load order.** `AAA` at low order vs `BBB` at high order, same path.
-   PASS = selector shows `BBB`. *This is the author channel itself.*
+5. ~~**ST override by load order.**~~ **PASSED 2026-07-21** — two paks shipped
+   `/Game/CMSF/Girl/00/ST_CMSF_Girl_00` at the same path with different strings; the selector
+   showed the higher-load-order one (`CMSF P5 HIGH-BBB`). **The author channel works.** A
+   framework-owned row can carry an author-owned name, with no runtime text writes and
+   nothing shipped by the author except their own packages.
+
+   Load order was decided by **MO2 priority**, not the filename token — `High` at MO2
+   priority 21 beat `Low` at 20, confirming the priority-token behaviour noted in
+   [cmsf_build.py](../tools/cmsf_build.py). Authors installing manually get the same result
+   from the shipped `_N_P` token; both channels work, and MO2's wins when present.
 
 **In-game, the respawn constraint:**
 
