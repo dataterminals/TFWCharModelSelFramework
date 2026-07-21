@@ -221,9 +221,12 @@ remaining gate on the shipping design.
    correct beside it (`DEFAULT SKIN 5`, `BLIND RUNNER`). **The game resolves a CMSF-authored
    string table.** Took two tries; see "The identity rule" below for what the first one got
    wrong.
-4. **ST-ref renders, cross-pak**, and **on the FIRST cold menu open** — string tables load on
-   demand, so a name that only appears after reopening the menu is a partial failure needing
-   an `Init()` retrigger.
+4. ~~**ST-ref renders, cross-pak**, and **on the FIRST cold menu open**.~~
+   **PASSED 2026-07-21** — `CMSF P4 LOW-AAA` rendered correctly with the string table in a
+   *separate pak* from the row, and it was right on the **first** menu open of a cold launch.
+   **No `Init()` retrigger is needed**, so the on-demand load lands in time and the partial
+   failure this rung was written to catch does not occur. Cross-pak is the realistic v0.2
+   shape, so this is the rung that matters more than 3.
 5. **ST override by load order.** `AAA` at low order vs `BBB` at high order, same path.
    PASS = selector shows `BBB`. *This is the author channel itself.*
 
