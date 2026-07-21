@@ -21,6 +21,12 @@ Two pieces:
 Adding a skin: drop a folder under `skins/` and re-run the build — see
 [docs/04-authoring.md](docs/04-authoring.md).
 
+In v0.1 the **end user** runs the build, because one artifact must merge every installed
+skin. [docs/05-v2-distribution.md](docs/05-v2-distribution.md) designs the inversion — author
+runs the exe, user installs a framework once — and records the constraint any such design has
+to survive: `SkinChoices` is also the random respawn pool, so reserved capacity is never
+inert. v0.2 is design-only; v0.1 remains the shipping path and the unbounded-skin mode.
+
 `CMSFUnlock` is worth having by itself: it makes the game's **own** base skins selectable,
 which vanilla does not allow. Normally, picking a DLC skin strands you there until you die
 in a raid and get randomly reassigned.
@@ -70,6 +76,7 @@ docs/
   02-poc.md         the experiments that located the real roster
   03-multiplayer.md what happens to mods in co-op — host authority, and skins as soft paths
   04-authoring.md   how to register a skin (mod-author facing)
+  05-v2-distribution.md  design: move the build to the author, user installs once
 ```
 ```
 skins/              registered skins, one folder each (skin.json)
