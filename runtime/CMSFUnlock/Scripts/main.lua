@@ -71,6 +71,9 @@ local function log(s) print("[CMSFUnlock] " .. tostring(s) .. "\n") end
 -- silent no-op: it updates the UPROPERTY without Slate ever noticing.
 
 local VIS_COLLAPSED = 1      -- ESlateVisibility::Collapsed, which also surrenders layout space
+-- Restoring means SelfHitTestInvisible, NOT Visible(0): that is what these tiles read as
+-- when the game builds them, so anything else would be this mod inventing a state.
+local VIS_DEFAULT = 4        -- ESlateVisibility::SelfHitTestInvisible
 
 -- This UE4SS build hands struct members and array elements back as RemoteUnrealParam
 -- WRAPPERS. Calling a UObject method on one throws; indexing further into one silently
@@ -97,54 +100,66 @@ local function expectedIcon(row)
     return string.format("/Game/CMSF/%s/%s/T_CMSF_%s_%s", char, slot, char, slot)
 end
 
--- true only when the tile is positively identified as an UNCLAIMED CMSF slot.
-local function isUnclaimed(t)
+-- Tri-state, and the third state is load-bearing:
+--   true   positively an UNCLAIMED CMSF slot   -> hide
+--   false  positively a CLAIMED CMSF slot      -> show
+--   nil    not a CMSF slot, or cannot tell yet -> leave alone
+--
+-- `nil` on an unresolved icon is the whole fix for the claim race. An author's texture is
+-- not necessarily resolved on the menu's first population: measured 2026-07-21, the first
+-- pass hid all 32 Girl slots including the one October had claimed, and a panel rebuilt
+-- ~6 s later got it right. Treating "not loaded yet" as "nothing shipped here" hides a real
+-- skin, which is the exact failure the fail-open rule exists to prevent.
+local function slotState(t)
     local row
     pcall(function() row = tostr(t.SkinRow.RowName) end)
-    if not row then return false end
+    if not row then return nil end
     local want = expectedIcon(row)
-    if not want then return false end
+    if not want then return nil end             -- vanilla row: bails before touching a brush
 
     local img, brush, res, name
     pcall(function() img = unwrap(t.SkinIcon) end)
-    if img == nil then return false end
+    if img == nil then return nil end
     pcall(function() brush = unwrap(img.Brush) end)
-    if brush == nil then return false end
+    if brush == nil then return nil end
     pcall(function() res = unwrap(brush.ResourceObject) end)
-    if res == nil then return true end          -- nothing resolved at all: unclaimed
+    if res == nil then return nil end           -- not resolved YET — do not read as unclaimed
     pcall(function() name = tostr(res:GetFullName()) end)
-    if not name then return false end           -- unreadable -> fail open
+    if not name then return nil end
     return name:find(want, 1, true) == nil
 end
 
--- Returns how many tiles were newly collapsed. MUST be called on the game thread.
+-- Returns hidden, restored. MUST be called on the game thread.
 local function prune(w)
-    if not pruning then return 0 end
+    if not pruning then return 0, 0 end
     local kids
-    if not pcall(function() kids = w.SkinOptions:GetAllChildren() end) then return 0 end
-    if not kids then return 0 end
-    local n = 0
+    if not pcall(function() kids = w.SkinOptions:GetAllChildren() end) then return 0, 0 end
+    if not kids then return 0, 0 end
+    local n, restored = 0, 0
     for _, raw in pairs(kids) do
         local t = unwrap(raw)
         local ok = false
         pcall(function() ok = t:IsValid() end)
         if ok then
-            -- Cheap gate FIRST. This runs every poll for as long as the menu is open, and
-            -- an already-collapsed tile needs no further work — so the steady state costs
-            -- one byte read per tile instead of resolving every icon once a second. A
-            -- visible vanilla tile is nearly as cheap: isUnclaimed bails at the row-name
-            -- pattern, before it ever touches the brush.
-            local vis
-            pcall(function() vis = t.Visibility end)
-            if vis ~= VIS_COLLAPSED and isUnclaimed(t) then
-                if pcall(function() t:SetVisibility(VIS_COLLAPSED) end) then n = n + 1 end
+            local st = slotState(t)
+            if st ~= nil then
+                -- BIDIRECTIONAL on purpose. An earlier version only ever collapsed, so a
+                -- tile misread once — during the claim race above — stayed hidden for the
+                -- rest of the session. Driving the tile to its correct state every pass
+                -- makes a transient misread self-correct on the next poll.
+                local want = st and VIS_COLLAPSED or VIS_DEFAULT
+                local vis
+                pcall(function() vis = t.Visibility end)
+                if vis ~= want and pcall(function() t:SetVisibility(want) end) then
+                    if st then n = n + 1 else restored = restored + 1 end
+                end
             end
         end
     end
-    return n
+    return n, restored
 end
 
--- Returns applied, seen. MUST be called on the game thread.
+-- Returns applied, seen, hidden, restored. MUST be called on the game thread.
 local function apply(verbose)
     local found = FindAllOf(WIDGET)
     if not found then
@@ -152,7 +167,7 @@ local function apply(verbose)
         return 0, 0, 0
     end
 
-    local applied, seen, pruned = 0, 0, 0
+    local applied, seen, pruned, restored = 0, 0, 0, 0
     for _, w in pairs(found) do
         if w:IsValid() then
             seen = seen + 1
@@ -172,7 +187,8 @@ local function apply(verbose)
             -- After Init(), which rebuilds the tiles and so undoes any earlier prune.
             -- Runs on every pass, not only when the filter changed: reopening the menu
             -- repopulates the WrapBox without necessarily re-setting the flag.
-            pruned = pruned + prune(w)
+            local h, r = prune(w)
+            pruned, restored = pruned + h, restored + r
 
             -- Always report the list size when asked, not only when something changed.
             -- The poll usually gets there first, so the earlier "only on change" version
@@ -195,7 +211,7 @@ local function apply(verbose)
     if verbose and seen > 0 and applied == 0 then
         log(string.format("%d selector(s) were already unfiltered", seen))
     end
-    return applied, seen, pruned
+    return applied, seen, pruned, restored
 end
 
 -- Auto-report the populated list size. SkinOptions has no children until the skin panel is
@@ -226,7 +242,7 @@ LoopAsync(POLL_MS, function()
     if enabled then
         -- The wrapper that v0.1 was missing.
         ExecuteInGameThread(function()
-            local applied, _, pruned = apply(false)
+            local applied, _, pruned, restored = apply(false)
             if applied > 0 and not quiet then
                 quiet = true
                 log("selector unfiltered (will keep it that way)")
@@ -235,6 +251,11 @@ LoopAsync(POLL_MS, function()
             -- accounts for four tiles and the number is a multiple of what is on screen.
             if pruned > 0 then
                 log(string.format("hid %d unclaimed CMSF tile(s)", pruned))
+            end
+            -- Worth its own line: a restore means a slot was hidden while its author's
+            -- texture was still resolving, and the next pass corrected it.
+            if restored > 0 then
+                log(string.format("restored %d claimed CMSF tile(s)", restored))
             end
             reportCount()
         end)
@@ -247,9 +268,10 @@ end)
 RegisterConsoleCommandHandler("cmsfunlock", function()
     enabled = true
     ExecuteInGameThread(function()
-        local applied, seen, pruned = apply(true)
+        local applied, seen, pruned, restored = apply(true)
         log(string.format("apply: %d changed / %d selector(s) found, %d slot(s) hidden",
             applied, seen, pruned))
+        if restored > 0 then log(string.format("  restored %d claimed tile(s)", restored)) end
     end)
     return true
 end)
