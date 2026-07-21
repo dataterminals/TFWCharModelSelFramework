@@ -159,24 +159,29 @@ v0.1 gave unbounded skins because the user regenerated. v0.2 gives a **finite, g
 namespace**: authors claim `<Char>/<NN>` from a public registry; pool size is raised on any
 framework release without breaking existing claims.
 
-Keep the pool **small**. Two independent reasons, and the second is the binding one:
+Keep the pool **demand-sized**, for one reason: every baked slot is a respawn-roll
+participant even with placeholders absorbing it.
 
-1. Every baked slot is a respawn-roll participant even with placeholders absorbing it.
-2. **Every baked slot costs a full base-mesh clone — 10.4 MB on average.** Measured across
-   all six characters (probe 2), so pool size is a download-size decision, not just a
-   namespace decision:
+Pool depth also has a download cost, since a placeholder is a full base-mesh clone —
+10.4 MB on average, measured across all six characters (probe 2):
 
-   | Pool depth | Slots | Framework pak |
-   |---|---|---|
-   | 1 per character | 6 | ~62 MB |
-   | 2 per character | 12 | ~125 MB |
-   | 4 per character | 24 | ~250 MB |
-   | 8 per character | 48 | ~499 MB |
+| Pool depth | Slots | Framework pak |
+|---|---|---|
+| 1 per character | 6 | ~62 MB |
+| 2 per character | 12 | ~125 MB |
+| 4 per character | 24 | ~250 MB |
+| 8 per character | 48 | ~499 MB |
 
-   All of it duplicating meshes the user already has on disk. Demand-size the pool (current
-   claims + small headroom); do not reserve generously. Note the pool need not be uniform —
-   depth is per character, and demand is not: ScavGirl carries most skin mods, Gunhead and
-   Shaman ship one base skin each and are the two most expensive to reserve.
+**This is a normal size for a game mod and is not a constraint on the design.** For scale:
+one shipped DLC skin, `SK_SCV_FL_OCT`, is 50.9 MB on its own. A framework installed once,
+which then makes every skin a small pak trio and retires v0.1's per-change exe run, is worth
+a few hundred MB without much argument.
+
+Two second-order notes, neither load-bearing. Pool depth need not be uniform, and demand is
+not uniform either — ScavGirl carries most skin mods, while Gunhead and Shaman ship one base
+skin each and happen to have the two largest meshes, so uniform reservation spends the most
+bytes where claims are least likely. And if the pool ever did grow past what a single
+download should carry, per-character framework paks are an easy out.
 
 ## What v0.1 keeps
 
@@ -203,10 +208,11 @@ Cheapest and most decisive first. Each rung can kill the design before the next 
    the entries intact. See "Tooling" below, including the export-rename gotcha.
 2. ~~**Placeholder mesh authorability.**~~ **PASSED 2026-07-21** — the mechanism works, and
    the template question answered itself: the character's own base mesh is the thing to
-   clone. See "Tooling: probe 2" below. **The mechanism passing is not the headline — the
-   size it costs is.**
+   clone, with all 43 imports surviving the round-trip. See "Tooling: probe 2" below.
 
-**No offline rungs remain.** Everything below needs a launch.
+**No offline rungs remain.** Everything below needs a launch. Both offline rungs passed, so
+**the v0.2 design is intact and the next step is probes 3–5** — the name channel is the
+remaining gate on the shipping design.
 
 **In-game, static name channel:**
 
@@ -234,17 +240,15 @@ Cheapest and most decisive first. Each rung can kill the design before the next 
 9. **Prune mechanics** (optional polish): plain `Visibility` byte write on a trailing tile;
    confirm it collapses and survives a re-`Init()`.
 
-**Promoted by probe 2 — run this before building placeholders:**
+**Long shot, high payoff:**
 
 10. **Entitlement path.** If a local grant exists, pool slots could live in
     `LockedSkinChoices` instead — statically invisible when unclaimed **and out of the random
     roll entirely**, which would retire this whole document's central constraint. Chase the
     `Skin.Girl.MAY` loose end ([00-findings.md](00-findings.md) §the May anomaly) alongside it.
 
-    Filed as a long shot until probe 2 measured what placeholders cost (~9 MB per slot).
-    It is now the one probe that can *remove* the cost instead of managing it, and its
-    decisive question — is ownership checked locally or against a backend — is cheap to ask.
-    See "Why this promotes the entitlement path" below.
+    Needs two new `skinpatch` commands before it can be built at all — see "A note on
+    rung 10" below. Not a blocker on anything; the placeholder design does not wait on it.
 
 ## Tooling: probe 1 is **PASSED** (2026-07-21)
 
@@ -321,9 +325,9 @@ roster entry is a soft path `/Game/CMSF/Girl/00/SK_CMSF_Girl_00.SK_CMSF_Girl_00`
 unrenamed export makes the roster entry unresolvable — the precise failure the placeholder
 exists to prevent.
 
-### The finding that actually matters
+### What a placeholder costs
 
-**A placeholder costs a full mesh clone.** Nothing in the round-trip shrinks it — the
+**A placeholder is a full mesh clone.** Nothing in the round-trip shrinks it — the
 `.uexp` *is* the render data, and it survives byte-identical because it has to.
 
 Measured for every character's `SkinChoices[0]`, the mesh a placeholder would clone
@@ -345,31 +349,37 @@ Incidental confirmation of scale from the same extracts: `SK_SCV_FL_OCT` is 50.9
 Note the inverse correlation with demand: Gunhead and Shaman have the **smallest** rosters
 (one base skin each, [00-findings.md:277](00-findings.md#L277)) and the **largest** meshes,
 so reserving uniformly spends the most bytes on the characters least likely to be claimed.
+Per-character pool depth, rather than one uniform N, is the cheap fix.
 
-This does not kill v0.2. It does mean the pool must be demand-sized to single digits per
-character (see "The trade"), and it materially raises the value of rung 10 — see below.
+**This is a cost, not a constraint.** It was briefly written up here as though it reshaped
+the design; it does not, and that framing is retracted. A few hundred MB is unremarkable for
+a game mod — one shipped DLC skin is 50.9 MB — and v0.2 spends it once to retire v0.1's
+per-change exe run, which is the entire point of the redesign. **Both offline rungs have now
+passed and the placeholder design stands as written.** Proceed to probes 3–5.
 
-### Why this promotes the entitlement path
+### A note on rung 10
 
-Rung 10 was filed as a long shot. The size finding makes it the **highest-expected-value
-remaining probe**, because it removes the cost rather than managing it:
+Rung 10 stays a long shot, where the ladder already had it. It is worth listing what it
+would buy *besides* size, since those merits do not depend on the size argument:
 
-- `LockedSkinChoices` is out of the respawn roll entirely, so slots there **need no
-  placeholder at all** — the framework pak collapses from hundreds of MB to a table patch.
-- It is also what the selector shows by default
+- `LockedSkinChoices` is out of the respawn roll entirely, so slots there need no
+  placeholder — which removes not just bytes but the correctness rule this document is
+  built around, and with it the fail-open pruning logic.
+- It is what the selector shows by default
   ([00-findings.md:288](00-findings.md#L288)), so CMSF slots would not depend on
-  `CMSFUnlock` to be visible.
-- Both entitlement tables are ordinary DataTables
-  ([00-findings.md:145](00-findings.md#L145)) — the exact asset class `skinpatch` already
-  patches. Defining a CMSF tag and SKU row is existing capability, not new tooling.
+  `CMSFUnlock` to be visible, and unclaimed slots would be statically invisible.
 
-The whole question is **where ownership is decided**: against those local tables, or against
-a Steam/EOS backend call. That is open question 4 in
-[00-findings.md](00-findings.md) §"what is still unknown" (does `GA_Player_ChangeSkin`
-re-validate against an ownership list?) and it is what the `Skin.Girl.MAY` anomaly is
-probably evidence about. **Answer that before building any placeholder.** A local check
-retires the central constraint of this document; a backend check confirms the placeholder
-design and caps the pool.
+Against that: it may not be reachable at all. The question is **where ownership is decided**
+— against the local tables, or against a Steam/EOS call. That is open question 4 in
+[00-findings.md](00-findings.md) §"what is still unknown", and the `Skin.Girl.MAY` anomaly
+is probably evidence about it.
+
+It is also **not** free tooling, contrary to an earlier claim here. Both entitlement tables
+are ordinary DataTables, but `skinpatch` cannot currently write them: `add` hardcodes the
+`SkinDetails` row shape, while these need `GameplayTagTableRow` and `FWEntitlementTableRow`;
+and `bpadd` appends to `SkinChoices`, a `TArray`, whereas `LockedSkinChoices` is a
+`TMap<FGameplayTag, FSoftObjectPath>` with no map-write path at all. Two new commands before
+the probe can even be built.
 
 ## Rejected
 
