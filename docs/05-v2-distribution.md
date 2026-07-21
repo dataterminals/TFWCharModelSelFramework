@@ -11,9 +11,14 @@ Two results define the design:
    not a broken model, so **placeholders are unnecessary** and the framework collapses from
    hundreds of MB to a table patch plus KB-sized string tables. See §"The rule".
 
+3. **The model works end to end.** Probe 7 built it in its real shape — a **1.15 MB**
+   framework pak for two slots, and an author pak claiming one with mesh + portrait + string
+   table. All three switched together, and the unclaimed slot read as deliberate. No
+   manifest, no exe, no `DT_SkinUIData` or `BP_Player_*` shipped by the author.
+
 Much of this document argues for a placeholder mechanism that is no longer needed. That
-argument is kept as the record of why; **it should not be built.** Rungs 7–8 (the end-to-end
-slot claim) remain. v0.1 still ships.
+argument is kept as the record of why; **it should not be built.** Outstanding: probe 7's
+revert path, and rung 8 (selection surviving a raid and a relaunch). v0.1 still ships.
 
 ## The goal
 
@@ -302,8 +307,17 @@ remaining gate on the shipping design.
 
 **In-game, end to end:**
 
-7. **Slot claim.** Author-style pak overriding one slot's three packages over the framework.
-   Verify mesh, portrait, and name all switch, and revert cleanly when the pak is removed.
+7. **Slot claim.** — **INSTALL HALF PASSED 2026-07-21.** An author pak overriding one slot's
+   three packages over the framework switched **all three together**: the author's name
+   (`OCTOBER SCAV (CLAIMED)`), the author's portrait (DLC04 rather than the sentinel locked
+   plate), and the author's mesh on selection. No partial claim — no author name beside a
+   framework portrait, no mesh without its name. The unclaimed slot 01 alongside it showed
+   its sentinel name and locked portrait and did nothing when selected.
+
+   This is the whole v0.2 model demonstrated at once, in the post-placeholder shape: a
+   **1.15 MB** framework pak for two slots, and an author shipping three packages and
+   nothing else. **Still to verify: the revert** — unticking the author pak alone must
+   return slot 00 to its sentinel.
 8. **Selection applies.** Selecting a claimed slot survives into a raid and across relaunch
    (`SaveGame`), with the pak present and absent.
 9. **Prune mechanics** (optional polish): plain `Visibility` byte write on a trailing tile;
