@@ -56,6 +56,55 @@ if (renamed == 0)
     return 1;
 }
 
+// Rewrite the package identity. A clone keeps the template's package name in its name map,
+// so its FPackageId collides with the game's table and the loader serves OURS in place of
+// ST_FW_UI_Skins — replacing 42 entries with 2 and rendering every vanilla skin as
+// <MISSING STRING TABLE ENTRY>, while our own TableId points at a package that was never
+// really published. Observed in-game 2026-07-21; this is the README's FolderName/FPackageId
+// collision, built by accident.
+string outDir = Path.GetDirectoryName(Path.GetFullPath(outPath)).Replace('\\', '/');
+int contentIdx = outDir.LastIndexOf("/Content/", StringComparison.OrdinalIgnoreCase);
+if (contentIdx < 0)
+{
+    Console.Error.WriteLine($"cannot derive a /Game/ package path from {outPath} — expected a .../Content/... staging path");
+    return 1;
+}
+string newPkg = "/Game/" + outDir.Substring(contentIdx + "/Content/".Length) + "/" + exportName;
+string tplPkg = null;
+
+var nameMap = asset.GetNameMapIndexList();
+for (int i = 0; i < nameMap.Count; i++)
+{
+    string v = nameMap[i].Value;
+    // The template's own package path — the entry that carries its identity.
+    if (v.StartsWith("/Game/", StringComparison.Ordinal) && v.EndsWith("/" + tplStem, StringComparison.Ordinal))
+    {
+        tplPkg = v;
+        asset.SetNameReference(i, FString.FromString(newPkg));
+    }
+}
+if (tplPkg == null)
+{
+    Console.Error.WriteLine($"no /Game/ package-name entry ending in '{tplStem}' found — refusing to ship a clone that would collide with the template");
+    return 1;
+}
+Console.WriteLine($"package: {tplPkg} -> {newPkg}");
+
+// FolderName is a separate summary field, not a name-map entry, and carries the package
+// path independently.
+if (asset.FolderName != null && asset.FolderName.Value == tplPkg)
+{
+    asset.FolderName = FString.FromString(newPkg);
+    Console.WriteLine($"  FolderName -> {newPkg}");
+}
+else if (asset.FolderName != null)
+{
+    Console.WriteLine($"  FolderName is '{asset.FolderName.Value}' (left alone)");
+}
+foreach (var n in asset.GetNameMapIndexList())
+    if (n.Value.Contains(tplStem, StringComparison.Ordinal))
+        Console.WriteLine($"  residual name-map entry: '{n.Value}'");
+
 Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(outPath)));
 asset.Write(outPath);
 
@@ -74,7 +123,21 @@ Console.WriteLine($"  export:    {gotExport}");
 Console.WriteLine($"  namespace: {st2.Table.TableNamespace}");
 foreach (var kv in st2.Table) Console.WriteLine($"    {kv.Key} = {kv.Value}");
 
-string pkg = "/Game/" + Path.GetDirectoryName(outPath).Replace('\\', '/').Split(new[] { "/Content/" }, StringSplitOptions.None).Last();
-Console.WriteLine($"  TableId:   {pkg}/{exportName}.{exportName}");
+Console.WriteLine($"  TableId:   {newPkg}.{exportName}");
+
+// The collision is silent and catastrophic, so prove the identity actually changed rather
+// than trusting the write.
+string blob = System.Text.Encoding.ASCII.GetString(File.ReadAllBytes(outPath));
+if (blob.Contains(tplPkg, StringComparison.Ordinal))
+{
+    Console.Error.WriteLine($"!! written asset still carries '{tplPkg}' — it would override the game's table");
+    return 1;
+}
+if (!blob.Contains(newPkg, StringComparison.Ordinal))
+{
+    Console.Error.WriteLine($"!! written asset does not carry '{newPkg}' — TableId would not resolve");
+    return 1;
+}
+Console.WriteLine($"  identity:  clean (no '{tplPkg}', carries '{newPkg}')");
 Console.WriteLine(ok ? "OK" : "MISMATCH after reload");
 return ok ? 0 : 1;

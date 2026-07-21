@@ -344,6 +344,40 @@ class Program
                 return 3;
             }
 
+            // A TableId is only an FName — it declares no dependency. Without a matching
+            // entry in the import table the string table package is never a dependency of
+            // this one, and `retoc to-zen` then emits a BROKEN import table: index -3 comes
+            // back as /Engine/UnknownPackage. That does not just break the new row, it
+            // clobbers the game's own ST_FW_UI_Skins import, so every vanilla skin renders
+            // as <MISSING STRING TABLE ENTRY>. Verified in-game 2026-07-21.
+            //
+            // So a TableId is a HARD reference and needs the import chain this file's header
+            // says soft asset refs let us skip. Clone the shape of the game's own
+            // string-table import pair rather than guessing ClassPackage values.
+            void EnsureStringTableImport(string tableId)
+            {
+                int dot = tableId.LastIndexOf('.');
+                string pkgName = tableId.Substring(0, dot), objName = tableId.Substring(dot + 1);
+
+                if (asset.Imports.Any(i => S(i.ObjectName) == objName && S(i.ClassName) == "StringTable"))
+                    return;
+
+                var tplObj = asset.Imports.FirstOrDefault(i => S(i.ClassName) == "StringTable");
+                if (tplObj == null)
+                    throw new InvalidOperationException(
+                        "no existing StringTable import to use as a template — cannot synthesise one safely");
+                var tplPkg = asset.Imports[-tplObj.OuterIndex.Index - 1];
+
+                var pkgIdx = asset.AddImport(new Import(
+                    tplPkg.ClassPackage, tplPkg.ClassName, tplPkg.OuterIndex,
+                    FName.FromString(asset, pkgName), false));
+                asset.AddImport(new Import(
+                    tplObj.ClassPackage, tplObj.ClassName, pkgIdx,
+                    FName.FromString(asset, objName), false));
+                Console.WriteLine($"      import + Package {pkgName}");
+                Console.WriteLine($"      import + StringTable {objName}");
+            }
+
             TextPropertyData MakeStText(string field, string tableId, string key)
             {
                 var t = TplText(field);
@@ -395,6 +429,8 @@ class Program
                     Console.WriteLine($"ABORT: row already exists: {rowName}");
                     return 4;
                 }
+
+                EnsureStringTableImport(tableId);
 
                 rows.Add(new StructPropertyData(FName.FromString(asset, rowName))
                 {
