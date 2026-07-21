@@ -25,7 +25,7 @@ skin.json:
     {
       "character":   "Girl",              one of the six pawns
       "slot":        "00",                the claimed slot (or pass --slot)
-      "name":        "October",
+      "name":        "Octogirl",
       "description": "...",
       "mesh":        "/Game/... .SK_X"    a cooked path to clone, OR a local .uasset
       "icon":        "/Game/... .T_X"     likewise — REQUIRED
@@ -35,7 +35,7 @@ A /Game/ value is cloned out of the live cook. Anything else is treated as a pat
 to the skin directory, which is how an author ships their own cooked assets.
 
 Usage:
-    python tools/cmsf_author.py skins/october-scavgirl --slot 00
+    python tools/cmsf_author.py skins/octogirl --slot 00
 """
 import argparse
 import json

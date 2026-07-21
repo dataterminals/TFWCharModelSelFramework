@@ -105,7 +105,7 @@ only be a fallback. Observed:
 |---|---|---|
 | 1 | unresolvable (p≈0.94) | kept the currently-worn DLC skin — no change, no breakage |
 | 2 | unresolvable (p≈0.94) | same |
-| 3 | the one resolvable CMSF slot | **October look applied** |
+| 3 | the one resolvable CMSF slot | **Octogirl look applied** |
 
 The third death is the other half of this rung: a mesh CMSF *appended* won the roll, which
 converts `SkinChoices` feeding the respawn roll from **[INFERRED]** to **[VERIFIED]**, and

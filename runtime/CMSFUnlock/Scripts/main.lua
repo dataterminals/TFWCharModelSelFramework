@@ -107,7 +107,7 @@ end
 --
 -- `nil` on an unresolved icon is the whole fix for the claim race. An author's texture is
 -- not necessarily resolved on the menu's first population: measured 2026-07-21, the first
--- pass hid all 32 Girl slots including the one October had claimed, and a panel rebuilt
+-- pass hid all 32 Girl slots including the one Octogirl had claimed, and a panel rebuilt
 -- ~6 s later got it right. Treating "not loaded yet" as "nothing shipped here" hides a real
 -- skin, which is the exact failure the fail-open rule exists to prevent.
 local function slotState(t)
