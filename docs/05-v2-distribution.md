@@ -1,13 +1,19 @@
 # v0.2 — moving the build to the author
 
-**Status: the name channel is PROVEN; the framework is not built.** Probes 1–5 pass
-(2026-07-21). A CMSF-authored string table builds, the game resolves it cross-pak on a cold
-first open, and a higher-load-order pak overrides it — which is the author channel itself,
-and was the design's riskiest unknown.
+**Status: probes 1–6 pass; the framework is not built.** (2026-07-21)
 
-What remains unproven is the **respawn constraint** (rung 6) and the end-to-end slot claim
-(rungs 7–8). v0.1 still ships. This document records the constraint that shapes the
-redesign, the architecture chosen against it, and the probe order validating it.
+Two results define the design:
+
+1. **The name channel works.** A CMSF-authored string table builds, the game resolves it
+   cross-pak on a cold first open, and a higher-load-order pak overrides it — the author
+   channel itself, and the riskiest unknown.
+2. **The central constraint is disproven.** An unresolvable roster path is a silent no-op,
+   not a broken model, so **placeholders are unnecessary** and the framework collapses from
+   hundreds of MB to a table patch plus KB-sized string tables. See §"The rule".
+
+Much of this document argues for a placeholder mechanism that is no longer needed. That
+argument is kept as the record of why; **it should not be built.** Rungs 7–8 (the end-to-end
+slot claim) remain. v0.1 still ships.
 
 ## The goal
 
@@ -66,14 +72,51 @@ threw `EXCEPTION_ACCESS_VIOLATION` ([01-design.md](01-design.md) §runtime probe
 does not protect against a C++ access violation — the process is gone before Lua sees it
 ([CMSFUnlock main.lua:23](../runtime/CMSFUnlock/Scripts/main.lua#L23)).
 
-### The rule
+### ~~The rule~~ — **DISPROVEN 2026-07-21**
 
-> **Every reserved roster path must resolve to a real mesh.**
-> Reserved capacity is never inert — it is always live in the respawn roll.
+> ~~**Every reserved roster path must resolve to a real mesh.**~~
+> ~~Reserved capacity is never inert — it is always live in the respawn roll.~~
 
-This constrains *any* pool-shaped design, including ones not proposed here. It is the
-reason the pool was right to be rejected in v0.1 ([`465ba14`](../../commit/465ba14)) and the
-reason it can be revived now.
+**An unresolvable roster path is a silent no-op.** The player keeps the skin they already
+have. No broken model, no invisible model, no crash — in *either* code path.
+
+Probe 6 tested selection: a row pointing at a path where nothing is shipped, selected from
+the menu, simply does not apply. Probe 6b tested the roll, which is what actually mattered
+since selection runs through `GA_Player_ChangeSkin` and the roll does not. It repointed every
+vanilla entry to a dead path and appended ten more, leaving 15 of 16 entries resolving to
+nothing and **no entry pointing at a base ScavGirl mesh**, so a default-looking respawn could
+only be a fallback. Observed:
+
+| Death | Roll landed on | Result |
+|---|---|---|
+| 1 | unresolvable (p≈0.94) | kept the currently-worn DLC skin — no change, no breakage |
+| 2 | unresolvable (p≈0.94) | same |
+| 3 | the one resolvable CMSF slot | **October look applied** |
+
+The third death is the other half of this rung: a mesh CMSF *appended* won the roll, which
+converts `SkinChoices` feeding the respawn roll from **[INFERRED]** to **[VERIFIED]**, and
+proves a CMSF-owned slot path is a first-class participant in it.
+
+Sample is n=2 for the unresolvable case, which is thin on its own — but the prior is strong
+(≈88% that both of those rolls were dead paths) and it agrees with the independent selection
+result. Worth a few more deaths to firm up, not worth blocking on.
+
+### What this changes
+
+The rule was the reason a reserved slot had to carry a ~10 MB placeholder clone. It does not
+hold, so:
+
+- **Placeholders are unnecessary.** Reserved capacity really is inert.
+- **The framework pak collapses** from hundreds of MB to a DataTable patch plus a handful of
+  KB-sized string tables.
+- **Pool size stops being a download-size decision** and goes back to being purely a
+  namespace decision — reserve generously.
+- **Rung 10 (the entitlement path) loses most of its motivation.** Its main draw was escaping
+  the respawn roll; there is now nothing to escape.
+
+The sections below still describe the placeholder architecture. They are kept as the record
+of why it was designed that way, but **the placeholder mechanism should be removed from the
+v0.2 build**. An unclaimed slot needs a row and a roster entry and nothing else.
 
 ## Why the pool works this time
 
@@ -164,11 +207,16 @@ v0.1 gave unbounded skins because the user regenerated. v0.2 gives a **finite, g
 namespace**: authors claim `<Char>/<NN>` from a public registry; pool size is raised on any
 framework release without breaking existing claims.
 
-Keep the pool **demand-sized**, for one reason: every baked slot is a respawn-roll
-participant even with placeholders absorbing it.
+**Superseded by probe 6.** With placeholders gone, a reserved slot is a DataTable row and a
+roster entry — bytes, not megabytes — and an unclaimed one is genuinely inert. Pool depth is
+a namespace decision again: **reserve generously**, and raise it on any framework release.
 
-Pool depth also has a download cost, since a placeholder is a full base-mesh clone —
-10.4 MB on average, measured across all six characters (probe 2):
+The measurements below are kept because they are real and were correct; they simply no
+longer describe a cost anyone pays. They now describe what a *claimed* slot's mesh costs the
+author, which is the same as any skin mod today.
+
+~~Keep the pool demand-sized~~ — a placeholder was a full base-mesh clone, 10.4 MB on
+average, measured across all six characters (probe 2):
 
 | Pool depth | Slots | Framework pak |
 |---|---|---|
@@ -245,10 +293,12 @@ remaining gate on the shipping design.
 
 **In-game, the respawn constraint:**
 
-6. **Placeholder absorbs the roll.** Bake N slots, die in the tunnels ~10×, confirm every
-   placeholder spawn is the harmless default look. Then deliberately test **one unresolvable
-   path** to observe the engine's real soft-path failure behaviour — currently **[INFERRED]**
-   and worth converting to [VERIFIED] since the whole constraint rests on it.
+6. ~~**Placeholder absorbs the roll.**~~ **PASSED 2026-07-21 — and killed its own premise.**
+   The unresolvable-path test it was told to run "deliberately" turned out to be the whole
+   rung. An unresolvable roster path is a **silent no-op** in both the selector and the
+   respawn roll, so placeholders are unnecessary and reserved capacity *is* inert. Also
+   converted `SkinChoices` → respawn roll from [INFERRED] to **[VERIFIED]**: a CMSF-appended
+   slot won a roll and applied. See §"The rule" above.
 
 **In-game, end to end:**
 
