@@ -178,31 +178,49 @@ using plain-type property writes only. Registration at runtime is dead — `RowM
 `uint8*`, roster elements are opaque userdata. Every documented-dangerous operation class
 stays banned: no hooks, no object/struct-parameter UFunction calls, no TArray construction.
 
-**Claim detection is a pak-stem scan** — list `Content/Paks/Mods` from Lua and look for stems
-matching the slot naming scheme, with the placeholder's sentinel string as a secondary
-signal.
+### The claim signal — **VERIFIED in-game 2026-07-21 (probe 9)**
 
-Deliberately *not* a sidecar manifest shipped beside the author's pak. A json in the user's
-install is a file they can misplace, forget to remove when uninstalling, or lose to an
-installer that only extracts `.pak`/`.utoc`/`.ucas` — and it buys nothing the stem scan does
-not already give. Keeping the user's side to pak trios means a CMSF skin installs exactly
-like every other TFW pak mod.
+> ~~**Claim detection is a pak-stem scan** — list `Content/Paks/Mods` from Lua and look for~~
+> ~~stems matching the slot naming scheme.~~ **Not built, and not needed.** The signal is
+> readable from the tile itself, so nothing touches the filesystem.
 
-> **Baseline is a manual install**: the user drops the trio into `Content/Paks/Mods`, and the
-> shipped filename tokens carry load order with no user action. Mod managers are an
-> additional compatibility surface, not the assumed case — design and probe the plain path
-> first.
+A tile is a `WBP_SkinButton_C`. Two of its properties carry everything required:
 
-Probes, in that order: (a) plain install — Lua can directory-list `Content/Paks/Mods` and the
-shipped stems are readable; (b) mod-manager compat — the same scan still works when a manager
-virtualises or renames the directory contents (for MO2 specifically: inside the USVFS-hooked
-process, and stems surviving the mapper's number-token rewrite). A manager that breaks the
-scan degrades to unpruned placeholder tiles — cosmetic, per the fail-open rule — so (b) is a
-polish check, not a gate.
+| Property | Type | Gives |
+|---|---|---|
+| `SkinRow` | `FDataTableRowHandle` | `SkinRow.RowName` — the tile's exact DataTable row |
+| `SkinIcon` | `UImage` | `Brush.ResourceObject` — the texture actually resolved |
 
-Because placeholders make unclaimed slots harmless, **pruning failing is cosmetic**, not a
-correctness break. Fail open: if the claim signal is unreadable, do not prune — a visible
-placeholder tile is always preferable to a hidden real skin.
+A slot's icon path is frozen, so the expected value is **derived from the row name**:
+`CMSF.Girl.00` → `/Game/CMSF/Girl/00/T_CMSF_Girl_00`. An author claims the slot by shipping a
+package there, so the tile is unclaimed exactly when its icon does **not** match.
+
+This needs no slot table in the Lua, no manifest, and no author filename convention — which
+also means a mod manager's path virtualisation and token rewriting are irrelevant, the whole
+risk the stem scan carried. Measured: vanilla tiles resolve to their real portraits, a slot
+with a package at its own path resolves there, and bare slots resolve to **an unrelated
+character's portrait** — `WBP_SkinButton_C` instances are pooled across the four ready-room
+panels, and a failed resolve leaves the previous brush in place.
+
+> **So the test is "does it match", never "is it null".** Bare slots do not read as null and
+> do not read as a default white texture; they read as a real, named, plausible texture
+> belonging to something else entirely.
+
+**This forecloses sentinel portraits.** A sentinel sits at the slot's own icon path, so an
+unclaimed slot carrying one reads as *claimed* and never prunes. The framework therefore
+ships **no textures at all** — the 571 KB/slot that capped pool depth is gone, and an
+unclaimed slot costs a row, a roster entry and a ~1 KB string table.
+
+Because an unclaimed slot is inert (probe 6), **pruning failing is cosmetic**, not a
+correctness break — it degrades to a white tile, not a broken skin. Fail open: prune only on
+a *positive* reading. The row must parse as `CMSF.<Char>.<NN>`, the icon must be readable,
+and it must not match. Anything unreadable leaves the tile visible, because a stray
+placeholder tile is always preferable to a hidden real skin. `cmsfnoprune` is the user-facing
+escape hatch, and it does not disturb the unlock.
+
+A registered v0.1 skin can never be pruned: its row is `CMSF.<Char>.<folder-id>`, which
+cannot match the two-digit slot pattern. v0.1's own `--pool` placeholders *do* match, and
+pruning them is precisely what [cmsf_build.py](../tools/cmsf_build.py) already assumes.
 
 ### Patch day
 
@@ -339,8 +357,14 @@ remaining gate on the shipping design.
    **Documented behaviour for users:** removing a skin mod *while wearing it* replays the
    first-spawn cutscene and reassigns a random skin. Harmless, but surprising enough to
    belong in the framework's user-facing notes.
-9. **Prune mechanics** (optional polish): plain `Visibility` byte write on a trailing tile;
-   confirm it collapses and survives a re-`Init()`.
+9. ~~**Prune mechanics** (optional polish): plain `Visibility` byte write on a trailing tile;
+   confirm it collapses and survives a re-`Init()`.~~ — **PASSES 2026-07-21, but not as
+   written.** The plain `Visibility` property write is a **silent no-op**: it updates the
+   UPROPERTY without Slate ever noticing. `SetVisibility(Collapsed)` is required. That is a
+   UFunction call, but its only parameter is a `uint8` enum by value, so it cannot
+   type-confuse a pointer dereference — the same risk class as the bool write CMSFUnlock
+   has always done. It does **not** survive `Init()`, which rebuilds the tiles; CMSFUnlock
+   re-prunes on each poll instead. See §"The claim signal" below.
 
 **Long shot, high payoff:**
 

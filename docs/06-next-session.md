@@ -2,7 +2,7 @@
 
 Written 2026-07-21, at the end of the session that validated v0.2 in-game.
 
-**Where things stand: the design is proven, the framework is not built.** Probes 1–8 all
+**Where things stand: the design is proven, the framework is not built.** Probes 1–9 all
 pass. Every mechanism v0.2 depends on has been demonstrated running in the actual game. What
 is left is writing a generator, not answering questions.
 
@@ -25,10 +25,14 @@ start implementing placeholders.
 | 6 | An unresolvable roster path is a **silent no-op**, in both the selector and the respawn roll. `SkinChoices` feeding the roll went `[INFERRED]` → **[VERIFIED]** |
 | 7 | A claim switches **name + portrait + mesh together**; unticking the author pak reverts cleanly |
 | 8 | Selection survives a raid and a relaunch; a dangling selection after uninstall re-rolls gracefully |
+| 9 | **Unclaimed tiles prune.** The claim signal is readable from the tile itself — no filesystem scan, no manifest, no author filename convention. Shipped in `CMSFUnlock` |
 
-Rung 9 (pruning unclaimed tiles) is optional polish, and less necessary than expected — the
-sentinel plates already read as deliberate. Rung 10 (entitlements) is effectively dead; its
-only real draw was escaping the respawn roll, and probe 6 removed the thing to escape.
+Rung 9 turned out to be load-bearing rather than polish: it removes the menu-clutter ceiling
+on pool depth, and because the signal it uses is the slot's own icon path, it also
+**forecloses sentinel portraits** — a sentinel would read as a claim. The framework now ships
+no textures at all, so a slot costs ~1 KB instead of 571 KB. Rung 10 (entitlements) is
+effectively dead; its only real draw was escaping the respawn roll, and probe 6 removed the
+thing to escape.
 
 ## 2. The architecture to build
 
@@ -43,10 +47,12 @@ Owns `DT_SkinUIData` and `BP_Player_*` outright. Per slot `<Char>/<NN>` it ships
   `T_CMSF_<Char>_<NN>` and `SK_CMSF_<Char>_<NN>`
 - the matching `SkinChoices` append on `BP_Player_<Char>`
 - a **sentinel string table** ("CMSF SLOT NN UNCLAIMED")
-- a **sentinel portrait** — a clone of `T_Menu_PickCharacter_Portrait_LockedV2` (571 KB)
-- **no mesh.** An unclaimed slot's mesh path resolves to nothing, which is harmless.
+- **no mesh and no portrait.** Both paths resolve to nothing, which is harmless (probe 6),
+  and shipping a portrait would defeat rung 9 — a sentinel at the slot's own icon path reads
+  as a *claim* and never prunes.
 
-Measured: **1.15 MB for two slots.** Sentinel portraits dominate; the tables are ~1 KB each.
+Measured: **~1 KB per slot.** Only the string table has any weight. The 571 KB sentinel
+portrait that dominated the earlier estimate is gone, and with it the ceiling on pool depth.
 
 ### The author's pak — one per skin
 
@@ -64,7 +70,7 @@ paks survive every framework rebase untouched.
 ## 3. What to build
 
 1. **Framework generator.** Probably a mode on `tools/cmsf_build.py`, or a sibling script.
-   Emit rows + roster entries + sentinel ST + sentinel portrait for N slots × 6 characters.
+   Emit rows + roster entries + a sentinel ST for N slots × 6 characters. **No portraits.**
    `tools/build_probe7.py` already does exactly this for one character and two slots — it is
    the working prototype; generalise it. Always rebuild from the **live cook**, never a
    committed snapshot ([04-authoring.md](04-authoring.md) staleness inversion).
@@ -73,10 +79,12 @@ paks survive every framework rebase untouched.
    `cmsf.exe` for authors — see the Nexus `.exe` constraint in the repo's prior art.
 3. **Slot registry.** A public list mapping `<Char>/<NN>` → who claimed it, so authors do not
    collide. Design question, not a technical one.
-4. **Rung 9, optional.** `CMSFUnlock` collapsing unclaimed tiles with plain-type property
-   writes only. Fail open: if the claim signal is unreadable, do not prune.
+4. ~~**Rung 9, optional.**~~ **Done** — shipped in `CMSFUnlock`. It derives each slot's
+   expected icon path from the row name, so it needs no slot table and never needs
+   regenerating when the pool grows.
 
-Pool sizing is now a **namespace** decision, not a download-size one. Reserve generously.
+Pool sizing is now purely a **namespace** decision — not download size (~1 KB/slot) and no
+longer menu clutter either (unclaimed slots are hidden). Reserve generously.
 
 ## 4. Tools that exist and work
 
@@ -92,6 +100,24 @@ Pool sizing is now a **namespace** decision, not a download-size one. Reserve ge
 | `stprobe` / `mshprobe` | Historical probe harnesses. **`mshprobe` does not rewrite identity** — use `mshgen` |
 
 ## 5. Gotchas that will bite
+
+**UE4SS hands back `RemoteUnrealParam` wrappers, and indexing into one silently yields
+`nil`.** This applies to struct members and array elements alike — `:get()` unwraps. The
+array case is loud: calling a UObject method on a wrapper throws *"attempt to call a
+RemoteUnrealParam value"*. The struct case is the dangerous one, because it produces a
+**confident wrong answer** instead of an error: reading `tile.SkinIcon.Brush.ResourceObject`
+without unwrapping `SkinIcon` first returned `null` for *every* tile, including vanilla
+portraits that were visibly rendering on screen. It survived a full in-game round trip
+looking like a clean negative result. Unwrap at **every** hop.
+
+> Only a control caught it. The vanilla tiles were logged alongside the CMSF ones precisely
+> so a read that fails for both would be distinguishable from a real finding — and that is
+> the only reason the false negative did not get designed around.
+
+**A plain `Visibility` property write does not hide a widget.** It updates the UPROPERTY
+without Slate noticing. `SetVisibility(Collapsed)` is required, and it does not survive
+`Init()` — re-prune on each poll.
+
 
 **The identity rule.** Cloning a package must rewrite *both* the name-map package entry
 **and** `FolderName`. Miss either and the clone collides by `FPackageId` and the loader
