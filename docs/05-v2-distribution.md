@@ -206,6 +206,33 @@ panels, and a failed resolve leaves the previous brush in place.
 > do not read as a default white texture; they read as a real, named, plausible texture
 > belonging to something else entirely.
 
+### The claim race — **MEASURED 2026-07-21**
+
+A tile's icon is not correct the instant the menu populates. On first population it still
+holds the **stale pooled texture** — the same pooling that makes an unclaimed slot read as
+another character's portrait — and the author's real texture lands a beat later. So the
+first prune pass reads a *claimed* slot as unclaimed and hides it.
+
+Measured against the real configuration (192-slot framework + one claim on Girl/00):
+
+```
+hid 128 unclaimed CMSF tile(s)     32 slots x 4 panels — the claim included
+restored 4 claimed CMSF tile(s)    0.9 s later: 1 slot x 4 panels, corrected
+hid  31 unclaimed CMSF tile(s)     a panel rebuilds; now correctly excludes slot 00
+```
+
+**The fix is that the prune pass is bidirectional**, driving every CMSF tile to its correct
+state on each poll rather than only ever collapsing. A pass that only hides makes a
+transient misread permanent for the session.
+
+> Treating an unresolved icon as "cannot tell" is also required, but it is **not** what
+> fixes this — the icon is resolved, it is merely stale. Both defects were real; only the
+> bidirectional pass addresses the one that actually fires.
+
+Cost: a claimed slot is missing for up to one poll (~1 s) after the menu opens, then appears.
+Deferring the first hide by a tick would trade that for 31 unclaimed tiles visibly collapsing
+instead, which is the larger flinch. Left as is deliberately.
+
 **This forecloses sentinel portraits.** A sentinel sits at the slot's own icon path, so an
 unclaimed slot carrying one reads as *claimed* and never prunes. The framework therefore
 ships **no textures at all** — the 571 KB/slot that capped pool depth is gone, and an
