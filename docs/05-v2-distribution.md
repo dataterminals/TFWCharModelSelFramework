@@ -1,13 +1,16 @@
 # v0.2 — moving the build to the author
 
-**Status: VALIDATED. Probes 1–8 pass. The design is proven; the framework is not built.**
-(2026-07-21)
+**Status: BUILT AND VALIDATED. Probes 1–9 pass.** (2026-07-21)
 
-Every mechanism v0.2 depends on has been demonstrated in-game. What remains is
-implementation — a generator that emits the framework and an author-side tool — not
-investigation. Rung 9 is optional polish and rung 10 is now largely moot.
+Both halves exist and have run together in-game: [cmsf_framework.py](../tools/cmsf_framework.py)
+emits the framework (32 slots x 6 characters, 192 slots, 0.57 MB) and
+[cmsf_author.py](../tools/cmsf_author.py) turns one skin into one pak trio. Verified end to
+end — an author's claim landing inside the full pool with name, description and portrait
+arriving together, and the other 31 slots pruned. Outstanding: the slot registry (a
+coordination question, not a technical one), the other five characters in-game, multiplayer,
+and patch day.
 
-Two results define the design:
+Four results define the design:
 
 1. **The name channel works.** A CMSF-authored string table builds, the game resolves it
    cross-pak on a cold first open, and a higher-load-order pak overrides it — the author
@@ -15,15 +18,16 @@ Two results define the design:
 2. **The central constraint is disproven.** An unresolvable roster path is a silent no-op,
    not a broken model, so **placeholders are unnecessary** and the framework collapses from
    hundreds of MB to a table patch plus KB-sized string tables. See §"The rule".
-
-3. **The model works end to end.** Probe 7 built it in its real shape — a **1.15 MB**
-   framework pak for two slots, and an author pak claiming one with mesh + portrait + string
-   table. All three switched together, and the unclaimed slot read as deliberate. No
-   manifest, no exe, no `DT_SkinUIData` or `BP_Player_*` shipped by the author.
+3. **The model works end to end.** Probe 7 built it in its real shape, and the shipping
+   tools have since reproduced it at full pool depth.
+4. **Unclaimed slots prune** (rung 9), which was expected to be polish and turned out to be
+   load-bearing: it removes the clutter ceiling on pool depth, and because the signal it
+   uses is the slot's own icon path it also **forecloses sentinel portraits**. A slot costs
+   ~1 KB instead of 571 KB. See §"The claim signal".
 
 Much of this document argues for a placeholder mechanism that is no longer needed. That
-argument is kept as the record of why; **it should not be built.** Outstanding: probe 7's
-revert path, and rung 8 (selection surviving a raid and a relaunch). v0.1 still ships.
+argument is kept as the record of why; **it should not be built.** v0.1 still ships as the
+rollback path.
 
 ## The goal
 
