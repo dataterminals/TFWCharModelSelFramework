@@ -122,11 +122,25 @@ stays banned: no hooks, no object/struct-parameter UFunction calls, no TArray co
 
 **Claim detection is a pak-stem scan** — list `Content/Paks/Mods` from Lua and look for stems
 matching the slot naming scheme, with the placeholder's sentinel string as a secondary
-signal. Deliberately *not* a sidecar manifest shipped beside the author's pak: that would put
-a json in the user's install and require a `ForeverWinterMO2Support` patch to pass
-`*.cmsf.json` through the mapper unrenamed. The stem scan keeps the user's side to pak trios
-only. (Probe: confirm Lua can directory-list `Content/Paks/Mods` from inside the USVFS-hooked
-process with MO2 running, and that stems survive the mapper's number-token rewrite.)
+signal.
+
+Deliberately *not* a sidecar manifest shipped beside the author's pak. A json in the user's
+install is a file they can misplace, forget to remove when uninstalling, or lose to an
+installer that only extracts `.pak`/`.utoc`/`.ucas` — and it buys nothing the stem scan does
+not already give. Keeping the user's side to pak trios means a CMSF skin installs exactly
+like every other TFW pak mod.
+
+> **Baseline is a manual install**: the user drops the trio into `Content/Paks/Mods`, and the
+> shipped filename tokens carry load order with no user action. Mod managers are an
+> additional compatibility surface, not the assumed case — design and probe the plain path
+> first.
+
+Probes, in that order: (a) plain install — Lua can directory-list `Content/Paks/Mods` and the
+shipped stems are readable; (b) mod-manager compat — the same scan still works when a manager
+virtualises or renames the directory contents (for MO2 specifically: inside the USVFS-hooked
+process, and stems surviving the mapper's number-token rewrite). A manager that breaks the
+scan degrades to unpruned placeholder tiles — cosmetic, per the fail-open rule — so (b) is a
+polish check, not a gate.
 
 Because placeholders make unclaimed slots harmless, **pruning failing is cosmetic**, not a
 correctness break. Fail open: if the claim signal is unreadable, do not prune — a visible
