@@ -128,11 +128,15 @@ local function prune(w)
         local t = unwrap(raw)
         local ok = false
         pcall(function() ok = t:IsValid() end)
-        if ok and isUnclaimed(t) then
-            -- Only write when it would change something; this runs on every poll.
+        if ok then
+            -- Cheap gate FIRST. This runs every poll for as long as the menu is open, and
+            -- an already-collapsed tile needs no further work — so the steady state costs
+            -- one byte read per tile instead of resolving every icon once a second. A
+            -- visible vanilla tile is nearly as cheap: isUnclaimed bails at the row-name
+            -- pattern, before it ever touches the brush.
             local vis
             pcall(function() vis = t.Visibility end)
-            if vis ~= VIS_COLLAPSED then
+            if vis ~= VIS_COLLAPSED and isUnclaimed(t) then
                 if pcall(function() t:SetVisibility(VIS_COLLAPSED) end) then n = n + 1 end
             end
         end

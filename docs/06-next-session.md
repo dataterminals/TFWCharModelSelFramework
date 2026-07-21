@@ -69,11 +69,14 @@ paks survive every framework rebase untouched.
 
 ## 3. What to build
 
-1. **Framework generator.** Probably a mode on `tools/cmsf_build.py`, or a sibling script.
-   Emit rows + roster entries + a sentinel ST for N slots × 6 characters. **No portraits.**
-   `tools/build_probe7.py` already does exactly this for one character and two slots — it is
-   the working prototype; generalise it. Always rebuild from the **live cook**, never a
-   committed snapshot ([04-authoring.md](04-authoring.md) staleness inversion).
+1. ~~**Framework generator.**~~ **Done** — [tools/cmsf_framework.py](../tools/cmsf_framework.py),
+   a sibling script rather than a mode on `cmsf_build.py` (v0.1 merges registered skins;
+   v0.2 emits a fixed pool and knows nothing about skins — different enough that one script
+   with modes would muddy both, and v0.1 must stay a working rollback path). Rebuilds from
+   the live cook, verifies by decoding the pak back out, and **refuses to ship a mesh or a
+   portrait** for any slot, since either would silently make that slot unprunable.
+
+   `python tools/cmsf_framework.py --slots 32`  ->  `dist/framework/CMSF_Core_9_P.*`
 2. **Author tool.** Takes a mesh + portrait + `skin.json` + a claimed slot, emits the three
    packages. `build_probe7.py`'s author half is the prototype. This is what becomes
    `cmsf.exe` for authors — see the Nexus `.exe` constraint in the repo's prior art.
@@ -83,8 +86,21 @@ paks survive every framework rebase untouched.
    expected icon path from the row name, so it needs no slot table and never needs
    regenerating when the pool grows.
 
-Pool sizing is now purely a **namespace** decision — not download size (~1 KB/slot) and no
-longer menu clutter either (unclaimed slots are hidden). Reserve generously.
+**Pool depth: 32 per character, 192 slots.** Measured, not guessed — the three things that
+could have constrained it do not:
+
+| Constraint | Measured |
+|---|---|
+| download size | 0.57 MB for 192 slots (3.0 KB/slot). 384 slots was still only 0.83 MB |
+| menu clutter | zero — unclaimed slots are hidden (rung 9) |
+| selector cost | `Init()` 0.60 ms at 7 tiles, 4.80 ms at 71. ~0.066 ms/tile, linear, once per menu open — under a third of a 60 fps frame at **double** the shipped depth |
+
+Slot numbers are **two digits by ABI** (`CMSFUnlock` matches `CMSF%.%a+%.%d%d`), so 100 is
+the hard cap and 32 leaves room to extend. Extending is legal — the pool is append-only —
+but it costs every user a framework re-download, so prefer not to.
+
+> The ABI is only frozen once v0.2 **ships**. Nothing is public yet, so the depth is still
+> cheap to change; after release it is not.
 
 ## 4. Tools that exist and work
 
