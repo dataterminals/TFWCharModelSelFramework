@@ -159,9 +159,21 @@ v0.1 gave unbounded skins because the user regenerated. v0.2 gives a **finite, g
 namespace**: authors claim `<Char>/<NN>` from a public registry; pool size is raised on any
 framework release without breaking existing claims.
 
-Keep the pool **small**. Every baked slot is a respawn-roll participant even with
-placeholders absorbing it, so demand-size it (current claims + small headroom) rather than
-reserving generously.
+Keep the pool **small**. Two independent reasons, and the second is the binding one:
+
+1. Every baked slot is a respawn-roll participant even with placeholders absorbing it.
+2. **Every baked slot costs ~9 MB.** A resolvable placeholder is a full clone of the
+   character's base mesh — measured at 8.65 MB for ScavGirl (probe 2). Pool size is
+   therefore a download-size decision, not just a namespace decision:
+
+   | Pool | Slots | Framework pak |
+   |---|---|---|
+   | 2 per character | 12 | ~104 MB |
+   | 4 per character | 24 | ~208 MB |
+   | 8 per character | 48 | ~415 MB |
+
+   All of it duplicating meshes the user already has on disk. Demand-size the pool (current
+   claims + small headroom); do not reserve generously.
 
 ## What v0.1 keeps
 
@@ -186,9 +198,12 @@ Cheapest and most decisive first. Each rung can kill the design before the next 
 1. ~~**String-table authorability.**~~ **PASSED 2026-07-21** — cloned the game's own
    `ST_FW_UI_Skins`, rewrote it, and round-tripped it through `retoc to-zen` and back with
    the entries intact. See "Tooling" below, including the export-rename gotcha.
-2. **Placeholder mesh authorability.** Same round-trip for a CMSF-authored mesh referencing
-   the game skeleton by import. (Unlike the string table, there is no obvious minimal
-   template to clone — this is the remaining offline unknown.)
+2. ~~**Placeholder mesh authorability.**~~ **PASSED 2026-07-21** — the mechanism works, and
+   the template question answered itself: the character's own base mesh is the thing to
+   clone. See "Tooling: probe 2" below. **The mechanism passing is not the headline — the
+   size it costs is.**
+
+**No offline rungs remain.** Everything below needs a launch.
 
 **In-game, static name channel:**
 
@@ -216,12 +231,17 @@ Cheapest and most decisive first. Each rung can kill the design before the next 
 9. **Prune mechanics** (optional polish): plain `Visibility` byte write on a trailing tile;
    confirm it collapses and survives a re-`Init()`.
 
-**Long shot, high payoff:**
+**Promoted by probe 2 — run this before building placeholders:**
 
 10. **Entitlement path.** If a local grant exists, pool slots could live in
     `LockedSkinChoices` instead — statically invisible when unclaimed **and out of the random
     roll entirely**, which would retire this whole document's central constraint. Chase the
     `Skin.Girl.MAY` loose end ([00-findings.md](00-findings.md) §the May anomaly) alongside it.
+
+    Filed as a long shot until probe 2 measured what placeholders cost (~9 MB per slot).
+    It is now the one probe that can *remove* the cost instead of managing it, and its
+    decisive question — is ownership checked locally or against a backend — is cheap to ask.
+    See "Why this promotes the entitlement path" below.
 
 ## Tooling: probe 1 is **PASSED** (2026-07-21)
 
@@ -265,6 +285,72 @@ place. **The generator must rename the export, not just the file.**
 fails with `FIoChunkId ... ScriptObjects not found in any containers`. This is already
 handled in [cmsf_build.py](../tools/cmsf_build.py) (it copies `global.utoc`/`global.ucas`
 into the verify directory) — worth knowing before it looks like a corrupt pak.
+
+## Tooling: probe 2 is **PASSED** (2026-07-21)
+
+The worry was that a mesh, unlike a string table, carries hard imports — skeleton,
+materials, physics asset — and that repathing it would null them, the way the
+"unattended repathing" rejection below describes. It does not, **when the clone source is a
+game asset extracted from the live cook** (the rejection is about third-party paks, where
+the imports were never resolvable to begin with).
+
+There is also no template problem. `SK_SCV_FL` — the character's own base mesh — is exactly
+the right thing to clone, because "the placeholder shows the character's default look" and
+"the placeholder *is* the default look" are the same asset.
+
+Verified end to end, offline, via `tools/mshprobe`:
+
+| Step | Result |
+|---|---|
+| `retoc to-legacy -f SK_SCV_FL` from the live cook | 14 assets; base mesh is 8,331 B `.uasset` + **8,637,458 B `.uexp`**, no `.ubulk` |
+| UAssetAPI 1.1.0 load | 8 exports, **43 imports**, 212 names; `SkeletalMesh` export resolves |
+| rename export `SK_SCV_FL` → `SK_CMSF_Girl_00`, `asset.Write()` | `.uexp` re-emitted byte-for-byte identical |
+| `retoc to-zen` at `/Game/CMSF/Girl/00/` | valid pak trio — 347 B `.pak` + 2,066 B `.utoc` + **8,646,142 B `.ucas`** |
+| `to-legacy` back, then reload | 8 exports, **43/43 imports preserved**, export carries the new name |
+
+The imports that survive are the ones that matter: `Skeleton GenericHumanoid_Skeleton`,
+`PhysicsAsset SK_SCV_FL_Slim_PhysicsAsset`, and 12 `MaterialInstanceConstant` refs — all
+still pointing at their original `/Game/Character/...` packages, which the framework does
+not ship and does not need to.
+
+The probe-1 export-rename rule applies here too and is **load-bearing in a new way**: a
+roster entry is a soft path `/Game/CMSF/Girl/00/SK_CMSF_Girl_00.SK_CMSF_Girl_00`, so an
+unrenamed export makes the roster entry unresolvable — the precise failure the placeholder
+exists to prevent.
+
+### The finding that actually matters
+
+**A placeholder costs a full mesh clone: ~8.65 MB per slot, per character.** Nothing in the
+round-trip shrinks it — the `.uexp` is the render data, and it survives byte-identical
+because it has to.
+
+Incidental confirmation of scale from the same extract: `SK_SCV_FL_OCT` is 50.9 MB,
+`SK_SCV_FL_DSQ` 15.3 MB, `SK_SCV_FL_SPT` 12.7 MB. Base meshes are the *cheap* end.
+
+This does not kill v0.2. It does mean the pool must be demand-sized to single digits per
+character (see "The trade"), and it materially raises the value of rung 10 — see below.
+
+### Why this promotes the entitlement path
+
+Rung 10 was filed as a long shot. The size finding makes it the **highest-expected-value
+remaining probe**, because it removes the cost rather than managing it:
+
+- `LockedSkinChoices` is out of the respawn roll entirely, so slots there **need no
+  placeholder at all** — the framework pak collapses from hundreds of MB to a table patch.
+- It is also what the selector shows by default
+  ([00-findings.md:288](00-findings.md#L288)), so CMSF slots would not depend on
+  `CMSFUnlock` to be visible.
+- Both entitlement tables are ordinary DataTables
+  ([00-findings.md:145](00-findings.md#L145)) — the exact asset class `skinpatch` already
+  patches. Defining a CMSF tag and SKU row is existing capability, not new tooling.
+
+The whole question is **where ownership is decided**: against those local tables, or against
+a Steam/EOS backend call. That is open question 4 in
+[00-findings.md](00-findings.md) §"what is still unknown" (does `GA_Player_ChangeSkin`
+re-validate against an ownership list?) and it is what the `Skin.Girl.MAY` anomaly is
+probably evidence about. **Answer that before building any placeholder.** A local check
+retires the central constraint of this document; a backend check confirms the placeholder
+design and caps the pool.
 
 ## Rejected
 
