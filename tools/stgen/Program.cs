@@ -126,16 +126,18 @@ foreach (var kv in st2.Table) Console.WriteLine($"    {kv.Key} = {kv.Value}");
 Console.WriteLine($"  TableId:   {newPkg}.{exportName}");
 
 // The collision is silent and catastrophic, so prove the identity actually changed rather
-// than trusting the write.
-string blob = System.Text.Encoding.ASCII.GetString(File.ReadAllBytes(outPath));
-if (blob.Contains(tplPkg, StringComparison.Ordinal))
+// than trusting the write. Compare whole name-map entries, not raw bytes — a substring scan
+// cannot distinguish a residual identity from a legitimate sibling package that merely
+// shares the prefix (e.g. a template's own _Skeleton alongside it).
+var backNames = back.GetNameMapIndexList().Select(n => n.Value).ToList();
+if (backNames.Any(v => v == tplPkg))
 {
-    Console.Error.WriteLine($"!! written asset still carries '{tplPkg}' — it would override the game's table");
+    Console.Error.WriteLine($"!! written asset still carries package identity '{tplPkg}' — it would override the game's table");
     return 1;
 }
-if (!blob.Contains(newPkg, StringComparison.Ordinal))
+if (!backNames.Any(v => v == newPkg))
 {
-    Console.Error.WriteLine($"!! written asset does not carry '{newPkg}' — TableId would not resolve");
+    Console.Error.WriteLine($"!! written asset has no package entry '{newPkg}' — TableId would not resolve");
     return 1;
 }
 Console.WriteLine($"  identity:  clean (no '{tplPkg}', carries '{newPkg}')");
