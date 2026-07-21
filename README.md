@@ -90,6 +90,7 @@ docs/
   03-multiplayer.md what happens to mods in co-op — host authority, and skins as soft paths
   04-authoring.md   how to register a skin (mod-author facing)
   05-v2-distribution.md  v0.2: move the build to the author — design + probe results
+  slots.md          the slot registry — who claimed which <Char>/<NN>
   06-next-session.md     handoff: what is proven, what to build, gotchas, machine setup
 ```
 ```

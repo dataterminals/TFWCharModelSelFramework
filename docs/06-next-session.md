@@ -92,8 +92,13 @@ paks survive every framework rebase untouched.
    The verify pass also fails the build if the pak contains **anything** outside
    `/Game/CMSF/<Char>/<NN>/`. "Authors never ship `DT_SkinUIData` or `BP_Player_*`" is now
    mechanically enforced rather than remembered.
-3. **Slot registry.** A public list mapping `<Char>/<NN>` → who claimed it, so authors do not
-   collide. Design question, not a technical one.
+3. ~~**Slot registry.**~~ **Done** — [docs/slots.md](slots.md), enforced by the author tool.
+   Claiming a slot registered to someone else is a hard error; an unregistered public slot is
+   only a note, so nobody is blocked waiting on a merge to test locally. Slots **28–31 are a
+   private range**: never registered, never policed, so a personal skin never touches the
+   registry and can never collide with a published one.
+
+   `python tools/cmsf_author.py --list-free Girl`
 4. ~~**Rung 9, optional.**~~ **Done** — shipped in `CMSFUnlock`. It derives each slot's
    expected icon path from the row name, so it needs no slot table and never needs
    regenerating when the pool grows.

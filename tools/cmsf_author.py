@@ -40,6 +40,7 @@ Usage:
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -91,6 +92,36 @@ def run(cmd, quiet=False):
     return r.stdout
 
 
+# docs/slots.md is the registry. Slots 28..31 are the private range: never registered, never
+# policed, so a personal or work-in-progress skin never has to touch the file and can never
+# collide with a published one.
+REGISTRY = ROOT / "docs" / "slots.md"
+PRIVATE_FROM = 28
+
+# | Character | Slot | ID | Skin | Author |
+_ROW = re.compile(r"^\|\s*(\w+)\s*\|\s*(\d{2})\s*\|\s*([\w.-]+)\s*\|\s*([^|]*?)\s*\|\s*([^|]*?)\s*\|")
+
+
+def load_registry():
+    """{(char, slot): {id, skin, author}} from docs/slots.md. Empty if absent."""
+    out = {}
+    if not REGISTRY.is_file():
+        return out
+    for line in REGISTRY.read_text(encoding="utf-8").splitlines():
+        m = _ROW.match(line.strip())
+        if not m:
+            continue
+        char, slot, ident, skin, author = m.groups()
+        if char in CHARACTERS:      # skips the header and the |---|---| separator
+            out[(char, slot)] = {"id": ident, "skin": skin, "author": author}
+    return out
+
+
+def free_slots(char, pool, reg):
+    return [f"{i:02d}" for i in range(min(pool, PRIVATE_FROM))
+            if (char, f"{i:02d}") not in reg]
+
+
 def game_to_rel(p):
     """/Game/A/B/C.C -> ForeverWinter/Content/A/B/C.uasset"""
     pkg = p.split(".")[0]
@@ -120,12 +151,35 @@ def resolve_source(value, skin_dir, src, kind):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("skin", help="directory containing skin.json")
+    ap.add_argument("skin", nargs="?", help="directory containing skin.json")
     ap.add_argument("--slot", help="claimed slot, two digits (overrides skin.json)")
     ap.add_argument("--pool-slots", type=int, default=32,
                     help="depth of the installed framework, for a sanity check")
+    ap.add_argument("--list-free", metavar="CHAR",
+                    help="list unclaimed public slots for a character and exit")
+    ap.add_argument("--unregistered", action="store_true",
+                    help="silence the note about building on an unregistered public slot")
     args = ap.parse_args()
 
+    if args.list_free:
+        char = args.list_free
+        if char not in CHARACTERS:
+            sys.exit(f"unknown character {char!r}; known: {', '.join(CHARACTERS)}")
+        reg = load_registry()
+        free = free_slots(char, args.pool_slots, reg)
+        taken = sorted(s for (c, s) in reg if c == char)
+        print(f"{char}: pool 00..{args.pool_slots - 1:02d}, "
+              f"public 00..{PRIVATE_FROM - 1:02d}, private {PRIVATE_FROM:02d}..31")
+        print(f"  free   {', '.join(free) if free else '(none)'}")
+        for s in taken:
+            h = reg[(char, s)]
+            print(f"  {s}     {h['id']}  -  {h['skin']} by {h['author']}")
+        if not REGISTRY.is_file():
+            print(f"  (no registry at {REGISTRY} — every public slot reads as free)")
+        return 0
+
+    if not args.skin:
+        ap.error("a skin directory is required (or use --list-free CHAR)")
     skin_dir = Path(args.skin).resolve()
     jf = skin_dir / "skin.json"
     if not jf.is_file():
@@ -145,6 +199,25 @@ def main():
         sys.exit(f"slot {slot} is outside the installed pool of {args.pool_slots} "
                  f"(00..{args.pool_slots - 1:02d}); nothing would reference it")
 
+    ident = skin.get("id") or skin_dir.name
+
+    # Registry check. Taking someone else's slot is an error; building on an unregistered
+    # public slot is only a warning, so nobody is ever blocked waiting on a merge to test
+    # something locally. The private range is not policed at all.
+    reg = load_registry()
+    held = reg.get((char, slot))
+    if held and held["id"] != ident:
+        free = free_slots(char, args.pool_slots, reg)
+        sys.exit(f"{char}/{slot} is registered to {held['id']!r} "
+                 f"({held['skin']} by {held['author']}) - claiming it would make one of the "
+                 f"two skins invisible.\n"
+                 f"  free public slots for {char}: "
+                 f"{', '.join(free) if free else '(none — the public range is full)'}\n"
+                 f"  see docs/slots.md, or use {PRIVATE_FROM:02d}..31 for a private skin")
+    if not held and int(slot) < PRIVATE_FROM and not args.unregistered:
+        print(f"    NOTE  {char}/{slot} is not in docs/slots.md. Fine for testing; claim it "
+              f"before publishing, or use {PRIVATE_FROM:02d}..31 for a private skin.")
+
     name = skin.get("name")
     if not name:
         sys.exit("skin.json needs a \"name\"")
@@ -158,7 +231,6 @@ def main():
                  "plain: CMSFUnlock treats an icon that does not resolve to the slot's own "
                  "path as proof the slot is unclaimed, and prunes the tile.")
 
-    ident = skin.get("id") or skin_dir.name
     mesh_obj, tex_obj, st_obj = (f"SK_CMSF_{char}_{slot}", f"T_CMSF_{char}_{slot}",
                                  f"ST_CMSF_{char}_{slot}")
     sd = f"ForeverWinter/Content/CMSF/{char}/{slot}"
