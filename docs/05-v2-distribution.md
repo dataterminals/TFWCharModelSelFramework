@@ -216,8 +216,11 @@ remaining gate on the shipping design.
 
 **In-game, static name channel:**
 
-3. **ST-ref renders, same pak.** One row whose `SkinName` references a CMSF string table in
-   the same pak. PASS = real strings in the selector.
+3. ~~**ST-ref renders, same pak.**~~ **PASSED 2026-07-21** — the selector shows
+   `CMSF P3 SAMEPAK` and its description on the appended tile, with every vanilla name still
+   correct beside it (`DEFAULT SKIN 5`, `BLIND RUNNER`). **The game resolves a CMSF-authored
+   string table.** Took two tries; see "The identity rule" below for what the first one got
+   wrong.
 4. **ST-ref renders, cross-pak**, and **on the FIRST cold menu open** — string tables load on
    demand, so a name that only appears after reopening the menu is a partial failure needing
    an `Init()` retrigger.
@@ -380,6 +383,52 @@ are ordinary DataTables, but `skinpatch` cannot currently write them: `add` hard
 and `bpadd` appends to `SkinChoices`, a `TArray`, whereas `LockedSkinChoices` is a
 `TMap<FGameplayTag, FSoftObjectPath>` with no map-write path at all. Two new commands before
 the probe can even be built.
+
+## The identity rule
+
+**A cloned package must have its package identity rewritten, not just its filename and
+export name.** Probe 3 failed the first time with `<MISSING STRING TABLE ENTRY>` on *every*
+tile, including vanilla rows CMSF never touched.
+
+`stgen` had renamed the file and the export, so the clone still carried
+`/Game/FW/UI/StringTables/ST_FW_UI_Skins` as its own package name. Its `FPackageId`
+therefore collided with the game's table and the loader served ours in its place — 42
+entries replaced by 2. Every vanilla row missed its key, and the CMSF row pointed at a
+package that had never actually been published.
+
+That is the [README](../README.md) §"The problem" `FolderName`/`FPackageId` collision — the
+mechanism the whole overwrite pipeline is built on, and the thing CMSF exists to avoid.
+Generating a package by cloning an existing one recreates it by default.
+
+Two fields carry the identity and **both** must be rewritten:
+
+| | |
+|---|---|
+| the name-map entry holding the package path | the obvious one |
+| **`FolderName`** | a separate summary field; rewriting the name map alone leaves the collision intact |
+
+`stgen` now rewrites both and refuses to emit an asset still carrying the template's package
+path. The same rule applies to any future CMSF generator that clones — including the
+placeholder mesh path, where `mshprobe` renames the export but the eventual generator will
+need the identity rewrite too.
+
+**A `TableId` is a hard reference.** It serialises as a bare `FName` and declares no
+dependency, so the string table package was not an import at all. [skinpatch's
+header](../tools/skinpatch/Program.cs) notes that soft asset refs let appended rows skip the
+import table, "unlike ScavgirlCarryPerks' skillpatch, which must synthesise an import chain
+for hard object references" — a `TableId` needs exactly that chain, and `addst` now
+synthesises it.
+
+### Method note
+
+`/Engine/UnknownPackage` in `to-legacy` output is **not** evidence of a corrupt pak. It also
+appears for any package that simply is not mounted in the container set being decoded. It
+was read as proof of corruption here and sent the first hour of diagnosis after `retoc`,
+which turned out to be innocent.
+
+The thing that actually resolved it was a **control**: CMSFUnlock with no CMSF pak at all,
+which showed vanilla names rendering correctly and established in two minutes that the bug
+was ours. Run the control before theorising about the mechanism.
 
 ## Rejected
 
