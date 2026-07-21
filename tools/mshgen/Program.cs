@@ -2,7 +2,11 @@ using UAssetAPI;
 using UAssetAPI.UnrealTypes;
 using UAssetAPI.Unversioned;
 
-// mshgen — clone a cooked mesh to a CMSF slot path with a NEW package identity.
+// mshgen — clone a cooked package to a CMSF slot path with a NEW package identity.
+//
+// Named for its first use but package-generic: it only needs an export matching the file
+// stem, so it clones SkeletalMesh, Texture2D and anything else the same way. Probe 7 uses it
+// for both the slot mesh and the slot portrait.
 //
 // tools/mshprobe was the probe-2 harness and answered "do the imports survive a round
 // trip". It renames the export but leaves the package identity alone, which is fine for a
