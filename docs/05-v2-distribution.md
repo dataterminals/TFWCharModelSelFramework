@@ -1,6 +1,11 @@
 # v0.2 — moving the build to the author
 
-**Status: probes 1–6 pass; the framework is not built.** (2026-07-21)
+**Status: VALIDATED. Probes 1–8 pass. The design is proven; the framework is not built.**
+(2026-07-21)
+
+Every mechanism v0.2 depends on has been demonstrated in-game. What remains is
+implementation — a generator that emits the framework and an author-side tool — not
+investigation. Rung 9 is optional polish and rung 10 is now largely moot.
 
 Two results define the design:
 
@@ -316,10 +321,24 @@ remaining gate on the shipping design.
 
    This is the whole v0.2 model demonstrated at once, in the post-placeholder shape: a
    **1.15 MB** framework pak for two slots, and an author shipping three packages and
-   nothing else. **Still to verify: the revert** — unticking the author pak alone must
-   return slot 00 to its sentinel.
-8. **Selection applies.** Selecting a claimed slot survives into a raid and across relaunch
-   (`SaveGame`), with the pak present and absent.
+   nothing else.
+
+   **Revert PASSED** — unticking the author pak alone returned slot 00 to
+   `CMSF SLOT 00 UNCLAIMED` with its sentinel portrait. The framework keeps no state about
+   what was once installed, so uninstalling a skin mod is clean.
+8. ~~**Selection applies.**~~ **PASSED 2026-07-21.** A claimed slot, once selected, held
+   into a raid and across a full quit and relaunch — so `SaveGame` round-trips a CMSF slot
+   exactly like a vanilla skin.
+
+   The pak-absent case is the one that mattered, and it is **graceful**. With the skin
+   selected and the author pak then removed, the game replayed the first-spawn cutscene and
+   rolled a fresh skin from the pool, landing on a default. No stranding, no broken model,
+   no invalid-save state — consistent with probe 6's no-op finding, now confirmed on the
+   `SaveGame` path too.
+
+   **Documented behaviour for users:** removing a skin mod *while wearing it* replays the
+   first-spawn cutscene and reassigns a random skin. Harmless, but surprising enough to
+   belong in the framework's user-facing notes.
 9. **Prune mechanics** (optional polish): plain `Visibility` byte write on a trailing tile;
    confirm it collapses and survives a re-`Init()`.
 
