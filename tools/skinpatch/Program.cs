@@ -310,6 +310,115 @@ class Program
             return 0;
         }
 
+        // ---- addst: rows whose text comes from a string table ------------------------
+        // The v0.2 name channel. `add` writes inline FText, which bakes the name into the
+        // row and therefore into whoever owns DT_SkinUIData — exactly what v0.2 has to
+        // avoid. These rows instead point at /Game/CMSF/<Char>/<NN>/ST_CMSF_<Char>_<NN>,
+        // so the author owns the *string table asset* and the framework's row never changes.
+        //
+        // Template is a BASE row (ScavGirl0), which already ships in this form; `add`'s
+        // Skin.Girl.MAY template is the wrong shape here because its history is Base.
+        if (mode == "addst")
+        {
+            if (args.Length < 5)
+            {
+                Console.WriteLine("usage: skinpatch addst <in> <usmap> <out> \"<RowName>|<TableId>|<NameKey>|<DescKey>|<IconPath>|<MeshPath>\"...");
+                return 1;
+            }
+            var outPath = args[3];
+            var specs = args.Skip(4).ToList();
+
+            const string TEMPLATE = "ScavGirl0";
+            var tpl = rows.FirstOrDefault(r => string.Equals(S(r.Name), TEMPLATE, StringComparison.OrdinalIgnoreCase));
+            if (tpl == null) { Console.WriteLine($"template row missing: {TEMPLATE}"); return 3; }
+
+            TextPropertyData TplText(string f) => tpl.Value.First(p => S(p.Name) == f) as TextPropertyData;
+            SoftObjectPropertyData TplSoft(string f) => tpl.Value.First(p => S(p.Name) == f) as SoftObjectPropertyData;
+
+            // If the base rows ever stop using a string table, cloning them silently produces
+            // inline rows that ignore the TableId — fail loudly instead.
+            if (TplText("SkinName").HistoryType != TextHistoryType.StringTableEntry)
+            {
+                Console.WriteLine($"ABORT: template {TEMPLATE}.SkinName is {TplText("SkinName").HistoryType}, "
+                                + "expected StringTableEntry — the game build changed shape");
+                return 3;
+            }
+
+            TextPropertyData MakeStText(string field, string tableId, string key)
+            {
+                var t = TplText(field);
+                return new TextPropertyData(FName.FromString(asset, field))
+                {
+                    Ancestry = t.Ancestry,
+                    Flags = t.Flags,
+                    HistoryType = t.HistoryType,          // StringTableEntry
+                    TransformType = t.TransformType,
+                    TableId = FName.FromString(asset, tableId),
+                    Namespace = null,
+                    Value = FString.FromString(key),
+                    CultureInvariantString = null,
+                };
+            }
+
+            SoftObjectPropertyData MakeSoft(string field, string fullPath)
+            {
+                int dot = fullPath.LastIndexOf('.');
+                if (dot < 0) throw new ArgumentException($"expected /Package/Path.ObjectName, got: {fullPath}");
+                string pkg = fullPath.Substring(0, dot), obj = fullPath.Substring(dot + 1);
+                var s = TplSoft(field);
+                return new SoftObjectPropertyData(FName.FromString(asset, field))
+                {
+                    Ancestry = s.Ancestry,
+                    Value = new FSoftObjectPath(
+                        new FTopLevelAssetPath(FName.FromString(asset, pkg), FName.FromString(asset, obj)),
+                        FString.FromString("")),
+                };
+            }
+
+            foreach (var spec in specs)
+            {
+                var p = spec.Split('|');
+                if (p.Length != 6)
+                {
+                    Console.WriteLine($"bad spec (want RowName|TableId|NameKey|DescKey|IconPath|MeshPath): {spec}");
+                    return 1;
+                }
+                string rowName = p[0], tableId = p[1], nameKey = p[2], descKey = p[3], icon = p[4], mesh = p[5];
+
+                if (!tableId.Contains('.'))
+                {
+                    Console.WriteLine($"ABORT: TableId must be /Package/Path.ObjectName, got: {tableId}");
+                    return 1;
+                }
+                if (rows.Any(r => string.Equals(S(r.Name), rowName, StringComparison.OrdinalIgnoreCase)))
+                {
+                    Console.WriteLine($"ABORT: row already exists: {rowName}");
+                    return 4;
+                }
+
+                rows.Add(new StructPropertyData(FName.FromString(asset, rowName))
+                {
+                    Ancestry = tpl.Ancestry,
+                    StructType = tpl.StructType,
+                    Value = new List<PropertyData>
+                    {
+                        MakeStText("SkinName",    tableId, nameKey),
+                        MakeStText("SkinDetails", tableId, descKey),
+                        MakeSoft("SkinIcon",      icon),
+                        MakeSoft("Skin",          mesh),
+                    },
+                });
+                Console.WriteLine($"  + {rowName}");
+                Console.WriteLine($"      table {tableId}");
+                Console.WriteLine($"      keys  {nameKey} / {descKey}");
+                Console.WriteLine($"      mesh  {mesh}");
+            }
+
+            asset.Write(outPath);
+            Console.WriteLine($"rows {rows.Count - specs.Count} -> {rows.Count}; wrote {outPath}");
+            return 0;
+        }
+
         Console.WriteLine($"unknown mode: {mode}");
         return 1;
     }
