@@ -1,10 +1,19 @@
 # Next session — pick up here
 
-Written 2026-07-21, at the end of the session that validated v0.2 in-game.
+Updated 2026-07-21, after the session that **built** v0.2.
 
-**Where things stand: the design is proven, the framework is not built.** Probes 1–9 all
-pass. Every mechanism v0.2 depends on has been demonstrated running in the actual game. What
-is left is writing a generator, not answering questions.
+**Where things stand: v0.2 is built and validated.** Probes 1–9 pass, and everything in §3
+below is done — the framework generator, the author tool, the slot registry and rung 9. The
+framework and an author's claim have run together in-game at full pool depth.
+
+What remains is not design work:
+
+- **Release packaging** — `cmsf.exe` for authors (the Nexus `.exe` constraint), and the
+  public-facing copy the README deliberately leaves undrafted.
+- **Runtime gaps** — only ScavGirl has ever been rendered in-game. All six characters are
+  verified in the *data* (the generator now asserts vanilla roster entries survive `bpadd`),
+  but Gunhead and Shaman ship single-entry `SkinChoices` arrays and have never been seen.
+- **Multiplayer and patch day**, both untested. See §8.
 
 Read this file, then [05-v2-distribution.md](05-v2-distribution.md) for the reasoning. That
 document still contains a long argument for a **placeholder mechanism that should not be
@@ -34,9 +43,10 @@ no textures at all, so a slot costs ~1 KB instead of 571 KB. Rung 10 (entitlemen
 effectively dead; its only real draw was escaping the respawn roll, and probe 6 removed the
 thing to escape.
 
-## 2. The architecture to build
+## 2. The architecture
 
 Probe 6 deleted the placeholder requirement, so this is much smaller than the doc's design.
+Built by [cmsf_framework.py](../tools/cmsf_framework.py) and [cmsf_author.py](../tools/cmsf_author.py).
 
 ### The framework pak — user installs once
 
@@ -67,7 +77,7 @@ clobber each other. `skin.json` is a build-time input and never ships.
 `/Game/CMSF/<Char>/<NN>/` is append-only, never renumbered. That promise is what lets author
 paks survive every framework rebase untouched.
 
-## 3. What to build
+## 3. What was built
 
 1. ~~**Framework generator.**~~ **Done** — [tools/cmsf_framework.py](../tools/cmsf_framework.py),
    a sibling script rather than a mode on `cmsf_build.py` (v0.1 merges registered skins;
