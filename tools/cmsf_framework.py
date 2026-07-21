@@ -28,6 +28,7 @@ Usage:
 """
 import argparse
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -81,6 +82,11 @@ def run(cmd, quiet=False):
         for line in r.stdout.strip().splitlines():
             print("      " + line)
     return r.stdout
+
+
+def roster_paths(text):
+    """Every /Game/... soft path in a `skinpatch bpskins` dump."""
+    return re.findall(r"/Game/\S+", text)
 
 
 def slot_paths(char, slot):
@@ -201,8 +207,24 @@ def main():
     problems = []
     tbl = run([skinpatch, "inspect", vout / TBL_REL, USMAP], quiet=True)
     for char in chars:
-        roster = run([skinpatch, "bpskins", vout / f"{BP_DIR}/BP_Player_{char}.uasset",
-                      USMAP], quiet=True)
+        bp_rel = f"{BP_DIR}/BP_Player_{char}.uasset"
+        roster = run([skinpatch, "bpskins", vout / bp_rel, USMAP], quiet=True)
+
+        # bpadd APPENDS, so every vanilla entry must still be there. Checking only that the
+        # CMSF meshes arrived would pass a build that had silently replaced the base skins —
+        # and since SkinChoices is also the random respawn pool, losing them would degrade
+        # vanilla behaviour for every user with zero skin mods installed. Compared against
+        # the freshly-extracted original rather than a hardcoded table, so it stays true
+        # across game updates that add or remove base skins.
+        before = set(roster_paths(run([skinpatch, "bpskins", src / bp_rel, USMAP],
+                                      quiet=True)))
+        after = set(roster_paths(roster))
+        lost = sorted(p for p in before - after)
+        if lost:
+            problems.append(f"{char}: bpadd DROPPED {len(lost)} vanilla roster "
+                            f"entr{'y' if len(lost) == 1 else 'ies'}: {lost[0]}"
+                            + (" ..." if len(lost) > 1 else ""))
+
         missing_rows = missing_slots = missing_st = 0
         for i in range(args.slots):
             slot = f"{i:02d}"
