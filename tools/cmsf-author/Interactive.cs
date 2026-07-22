@@ -46,14 +46,29 @@ static class Interactive
         }
     }
 
+    /// <summary>Set when the menu exited because the user chose to quit. They have already
+    /// said they are done, so a further "press Enter" is one keystroke of nagging.</summary>
+    public static bool ExitedCleanly;
+
     /// <summary>Hold the window open so the result is readable. Matters most on FAILURE —
     /// that is exactly when there is something to read.</summary>
     public static void PauseIfOwned()
     {
-        if (!OwnsConsole) return;
+        if (!OwnsConsole || ExitedCleanly) return;
         Console.WriteLine();
         Console.Write("Press Enter to close...");
         try { Console.ReadLine(); } catch { /* no stdin; nothing to wait for */ }
+    }
+
+    /// <summary>
+    /// Prompt and read a line, trimmed. Returns NULL on end-of-input, and callers must treat
+    /// that as "stop asking" — collapsing it to "" makes a menu loop forever the moment stdin
+    /// closes, spinning on an unanswerable prompt.
+    /// </summary>
+    public static string Ask(string prompt)
+    {
+        Console.Write(prompt);
+        return Console.ReadLine()?.Trim();
     }
 
     /// <summary>
@@ -63,17 +78,11 @@ static class Interactive
     /// </summary>
     public static string AskForSkinFolder()
     {
-        Console.WriteLine("CMSF author tool");
+        Console.WriteLine("  Drag your skin folder into this window and press Enter, or paste its path.");
+        Console.WriteLine("  It needs to contain a skin.json.");
         Console.WriteLine();
-        Console.WriteLine("  Drag your skin folder onto this window and press Enter,");
-        Console.WriteLine("  or paste its path. It needs to contain a skin.json.");
-        Console.WriteLine();
-        Console.WriteLine("  (You can also drag the folder straight onto cmsf-author.exe next time,");
-        Console.WriteLine("   or run it from a terminal — see --help.)");
-        Console.WriteLine();
-        Console.Write("skin folder> ");
-
-        var line = (Console.ReadLine() ?? "").Trim();
+        var line = Ask("  skin folder> ");
+        if (line == null) return null;                       // EOF
         if (line.Length >= 2 && line.StartsWith('"') && line.EndsWith('"'))
             line = line.Substring(1, line.Length - 2);
         Console.WriteLine();

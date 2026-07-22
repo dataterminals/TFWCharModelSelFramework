@@ -49,27 +49,51 @@ static class Banner
         @" \___//_/  /_//___/  /_/",
     };
 
+    static bool _colour, _unicode;
+
     public static void Write()
     {
         if (Console.IsOutputRedirected) return;
 
-        bool colour = TryEnableAnsi()
-                      && string.IsNullOrEmpty(Environment.GetEnvironmentVariable("NO_COLOR"));
+        _colour = TryEnableAnsi()
+                  && string.IsNullOrEmpty(Environment.GetEnvironmentVariable("NO_COLOR"));
+
+        // Box-drawing needs UTF-8 out; a legacy code page would print mojibake instead of a
+        // rule, so the fallback is an ASCII dash rather than a gamble.
+        try { Console.OutputEncoding = System.Text.Encoding.UTF8; _unicode = true; }
+        catch { _unicode = false; }
 
         Console.WriteLine();
         for (int i = 0; i < Art.Length; i++)
         {
             // The subtitle rides the last line rather than taking one of its own.
             bool last = i == Art.Length - 1;
-            string line = last ? Art[i].PadRight(30) + "Character Model Selection Framework" : Art[i];
-            if (!colour) { Console.WriteLine(line); continue; }
-
+            if (!_colour)
+            {
+                Console.WriteLine(last ? Art[i].PadRight(30) + Subtitle : Art[i]);
+                continue;
+            }
             if (last)
-                Console.WriteLine(Gold + Art[i].PadRight(30) + Reset +
-                                  Dim + "Character Model Selection Framework" + Reset);
+                Console.WriteLine(Gold + Art[i].PadRight(30) + Reset + Dim + Subtitle + Reset);
             else
                 Console.WriteLine(Gold + Art[i] + Reset);
         }
         Console.WriteLine();
+        Rule();
+        Console.WriteLine();
+    }
+
+    const string Subtitle = "Character Model Selection Framework";
+
+    /// <summary>A horizontal rule, echoing the inlay border on the mod icon. Also used between
+    /// menu actions, so a long build's output does not run into the next prompt.</summary>
+    public static void Rule()
+    {
+        if (Console.IsOutputRedirected) return;
+        int width;
+        try { width = Math.Max(40, Math.Min(66, Console.WindowWidth - 2)); }
+        catch { width = 66; }
+        var line = new string(_unicode ? '─' : '-', width);
+        Console.WriteLine(_colour ? Dim + line + Reset : line);
     }
 }

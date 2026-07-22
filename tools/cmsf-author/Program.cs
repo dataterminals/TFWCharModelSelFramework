@@ -53,40 +53,111 @@ static class Program
         var a = Args.Parse(rawArgs);
         if (a.Help) { Usage(); return 0; }
 
-        int pool = a.PoolSlots;
-        string registrySource = a.Registry ?? SlotRegistry.DefaultUrl;
+        // Double-clicked with nothing to go on. Someone who reached this by double-clicking an
+        // exe has no terminal to type a command into, so hand them a menu rather than usage
+        // text describing commands they cannot run. --menu forces the same thing from a shell,
+        // which is also the only way to exercise it without driving a console window.
+        if (a.Menu || (a.ListFree == null && a.SkinDir == null && Interactive.OwnsConsole))
+            return Menu(a);
 
-        // ---- --list-free CHAR -------------------------------------------------------------
-        if (a.ListFree != null)
-        {
-            var ch = Characters.FirstOrDefault(c => c.Equals(a.ListFree, StringComparison.OrdinalIgnoreCase))
-                     ?? throw new BuildError($"unknown character '{a.ListFree}'; known: {string.Join(", ", Characters)}");
-            var reg = SlotRegistry.Load(registrySource, Characters, out var regNote);
-            if (regNote != null) Console.WriteLine($"    NOTE  {regNote}");
-
-            var free = SlotRegistry.FreeSlots(ch, pool, reg);
-            Console.WriteLine($"{ch}: pool 00..{(pool - 1):D2}, public 00..{(SlotRegistry.PrivateFrom - 1):D2}, " +
-                              $"private {SlotRegistry.PrivateFrom:D2}..31");
-            Console.WriteLine($"  free   {(free.Count > 0 ? string.Join(", ", free) : "(none)")}");
-            foreach (var kv in (reg ?? new()).Where(k => k.Key.StartsWith(ch + "/", StringComparison.OrdinalIgnoreCase))
-                                             .OrderBy(k => k.Key, StringComparer.Ordinal))
-                Console.WriteLine($"  {kv.Key.Split('/')[1]}     {kv.Value.Id}  -  {kv.Value.Skin} by {kv.Value.Author}");
-            return 0;
-        }
+        if (a.ListFree != null) { ListFree(a, a.ListFree); return 0; }
 
         if (a.SkinDir == null)
         {
-            // Double-clicked with nothing to go on. Printing usage at someone who has no
-            // terminal to type it into is not help, so ask.
-            if (!Interactive.OwnsConsole)
-            {
-                Usage();
-                throw new BuildError("a skin directory is required (or use --list-free CHAR)");
-            }
-            a.SkinDir = Interactive.AskForSkinFolder();
-            if (string.IsNullOrWhiteSpace(a.SkinDir))
-                throw new BuildError("no skin folder given, so there is nothing to build.");
+            Usage();
+            throw new BuildError("a skin directory is required (or use --list-free CHAR)");
         }
+
+        Build(a);
+        return 0;
+    }
+
+    /// <summary>
+    /// The double-click experience: drive the whole tool from the window that just opened.
+    /// Loops, so one launch can build several skins and check slots in between; a failed
+    /// action prints and returns to the menu instead of taking the window down with it.
+    /// </summary>
+    static int Menu(Args a)
+    {
+        while (true)
+        {
+            Console.WriteLine("  What would you like to do?");
+            Console.WriteLine();
+            Console.WriteLine("    1   Build a skin");
+            Console.WriteLine("    2   Show free slots for a character");
+            Console.WriteLine("    3   Show help");
+            Console.WriteLine("    Q   Quit");
+            Console.WriteLine();
+
+            var choice = Interactive.Ask("  > ")?.ToLowerInvariant();
+            // Null is end-of-input, not a bad answer. Re-prompting on it loops forever.
+            if (choice == null) { Interactive.ExitedCleanly = true; return 0; }
+            Console.WriteLine();
+
+            try
+            {
+                switch (choice)
+                {
+                    case "1":
+                        var dir = Interactive.AskForSkinFolder();
+                        if (string.IsNullOrWhiteSpace(dir)) { Console.WriteLine("  Nothing entered."); break; }
+                        a.SkinDir = dir;
+                        Build(a);
+                        break;
+
+                    case "2":
+                        var ch = Interactive.Ask($"  Character ({string.Join(", ", Characters)})> ");
+                        if (ch == null) { Interactive.ExitedCleanly = true; return 0; }
+                        Console.WriteLine();
+                        if (!string.IsNullOrWhiteSpace(ch)) ListFree(a, ch);
+                        break;
+
+                    case "3":
+                        Usage();
+                        break;
+
+                    case "q" or "quit" or "exit":
+                        Interactive.ExitedCleanly = true;
+                        return 0;
+
+                    default:
+                        Console.WriteLine("  Enter 1, 2, 3 or Q.");
+                        break;
+                }
+            }
+            catch (BuildError e)
+            {
+                // A bad path or an unclaimable slot is an ordinary mistake at a prompt, not a
+                // reason to close the window they are working in.
+                Console.Error.WriteLine($"ERROR: {e.Message}");
+            }
+
+            Console.WriteLine();
+            Banner.Rule();
+            Console.WriteLine();
+        }
+    }
+
+    static void ListFree(Args a, string character)
+    {
+        var ch = Characters.FirstOrDefault(c => c.Equals(character, StringComparison.OrdinalIgnoreCase))
+                 ?? throw new BuildError($"unknown character '{character}'; known: {string.Join(", ", Characters)}");
+        var reg = SlotRegistry.Load(a.Registry ?? SlotRegistry.DefaultUrl, Characters, out var regNote);
+        if (regNote != null) Console.WriteLine($"    NOTE  {regNote}");
+
+        var free = SlotRegistry.FreeSlots(ch, a.PoolSlots, reg);
+        Console.WriteLine($"{ch}: pool 00..{(a.PoolSlots - 1):D2}, public 00..{(SlotRegistry.PrivateFrom - 1):D2}, " +
+                          $"private {SlotRegistry.PrivateFrom:D2}..31");
+        Console.WriteLine($"  free   {(free.Count > 0 ? string.Join(", ", free) : "(none)")}");
+        foreach (var kv in (reg ?? new()).Where(k => k.Key.StartsWith(ch + "/", StringComparison.OrdinalIgnoreCase))
+                                         .OrderBy(k => k.Key, StringComparer.Ordinal))
+            Console.WriteLine($"  {kv.Key.Split('/')[1]}     {kv.Value.Id}  -  {kv.Value.Skin} by {kv.Value.Author}");
+    }
+
+    static void Build(Args a)
+    {
+        int pool = a.PoolSlots;
+        string registrySource = a.Registry ?? SlotRegistry.DefaultUrl;
 
         // ---- skin.json --------------------------------------------------------------------
         var skinDir = Path.GetFullPath(a.SkinDir);
@@ -197,7 +268,6 @@ static class Program
         Console.WriteLine($"Install alongside the framework. This pak MUST load ABOVE it " +
                           $"(_{PakOrder}_P beats _9_P; under MO2, higher priority wins).");
         Console.WriteLine($"Expect {character} slot {slot} to show '{name}' with this portrait and mesh.");
-        return 0;
     }
 
     /// <summary>A /Game/ value is cloned out of the live cook; anything else is a path
@@ -288,6 +358,7 @@ static class Program
           --game PATH        the game folder; default is Steam auto-detection
           --retoc PATH       retoc.exe; default is beside this exe, then PATH
           --registry PATH    a local slots.md instead of fetching the published one
+          --menu             the interactive menu (automatic when double-clicked)
           -h, --help         this
 
         skin.json:
@@ -302,7 +373,7 @@ static class Program
     {
         public string SkinDir, Slot, ListFree, Out, Usmap, Game, Retoc, Registry;
         public int PoolSlots = 32;
-        public bool Unregistered, Help;
+        public bool Unregistered, Help, Menu;
 
         public static Args Parse(string[] argv)
         {
@@ -325,6 +396,7 @@ static class Program
                     case "--game": a.Game = Next("--game"); break;
                     case "--retoc": a.Retoc = Next("--retoc"); break;
                     case "--registry": a.Registry = Next("--registry"); break;
+                    case "--menu": a.Menu = true; break;
                     case "-h" or "--help": a.Help = true; break;
                     default:
                         if (argv[i].StartsWith('-')) throw new BuildError($"unknown option {argv[i]}");
