@@ -131,6 +131,15 @@ but it costs every user a framework re-download, so prefer not to.
 
 ## 4. Tools that exist and work
 
+**The two you will actually run:**
+
+| Tool | Does |
+|---|---|
+| `cmsf_framework.py --slots 32` | the framework pak users install once. Rebuild from every fresh cook. Refuses to ship a mesh or portrait, and asserts vanilla roster entries survive `bpadd` |
+| `cmsf_author.py <skin-dir>` | one skin -> one pak trio. Enforces the registry, requires a portrait, and fails if the pak contains anything outside the slot directory. `--list-free CHAR` shows availability |
+
+**The layer underneath**, used by both:
+
 | Tool | Does |
 |---|---|
 | `skinpatch add` | DataTable rows with **inline** FText (v0.1) |
@@ -141,6 +150,13 @@ but it costs every user a framework re-download, so prefer not to.
 | `stgen` | Generate a CMSF string table from the game's own, with identity rewrite |
 | `mshgen` | Clone **any** cooked package to a slot path with a new identity (mesh *and* texture) |
 | `stprobe` / `mshprobe` | Historical probe harnesses. **`mshprobe` does not rewrite identity** — use `mshgen` |
+
+**Runtime:**
+
+| Mod | Does |
+|---|---|
+| `CMSFUnlock` | unfilters the selector (v0.1) **and** hides unclaimed CMSF slots (rung 9). `cmsfnoprune` is the escape hatch |
+| `CMSFTime` | `cmsftime` times `Init()` over N reps. Only needed if pool depth is revisited |
 
 ## 5. Gotchas that will bite
 
@@ -215,28 +231,59 @@ higher number wins, the column ascends, so the winner sits at the *bottom* of th
 `build/` reads ~180 GB but is almost entirely hardlinks into the Steam install from
 full-mount verification farms; real usage is a few hundred MB. Do not "reclaim" it.
 
-## 7. Probe mods currently staged in MO2
+## 7. What is staged in MO2
 
-All disabled unless noted. Safe to delete once the real framework exists.
+**Enabled — this is the real v0.2 configuration:**
 
-`CMSF Probe3 SamePak`, `CMSF Probe45 Core/Low/High`, `CMSF Probe6 Respawn`,
-`CMSF Probe6b RollTest`, `CMSF P7 Core`, `CMSF P7 Author`, `CMSFUnlock ONLY (control)`.
+| Mod | Contains |
+|---|---|
+| `CMSF Skin - Octogirl (Girl 00)` | the author pak. **Must out-prioritise the framework** |
+| `CMSF v0.2 Framework` | `CMSF_Core_9_P` (192 slots) + `CMSFUnlock` |
+
+In `modlist.txt` the **first line is the highest priority**, so Octogirl sitting above the
+framework is correct. In the MO2 UI that is the *bottom* of the list — the two views are
+inverted, which is easy to trip over.
+
+**Disabled, worth keeping:**
+
+- `CMSFUnlock ONLY (control)` — CMSFUnlock + CMSFTime, no pak. The fastest way to establish
+  whether a bug is CMSF's or the game's. Keep permanently.
+- `CMSF Stress 384` — 64 slots x 6, the pool-depth measurement. Keep until the ABI is frozen.
+- `CMSF P9 IconSignal` — the rung 9 probe. Superseded; safe to delete.
+
+**Disabled, safe to delete** — every mod from the probe era: `CMSF Probe3 SamePak`,
+`CMSF Probe45 Core/Low/High`, `CMSF Probe6 Respawn`, `CMSF Probe6b RollTest`, `CMSF P7 Core`,
+`CMSF P7 Author`, `CMSF Roster Test`, `CMSF Probe`, `CMSF PoC`, `CMSF PoC Fallback`, `CMSF`.
 
 **`CMSF Probe6b RollTest` strips vanilla skins out of the respawn pool** — it is a
 diagnostic. Do not leave it enabled.
-
-The `CMSFUnlock ONLY (control)` mod is worth keeping permanently: it is the fastest way to
-establish whether a bug is CMSF's or the game's.
 
 ## 8. Still unknown
 
 - **n=2** on the unresolvable-path-in-the-roll observation. The prior is strong (~88% both
   rolls were dead paths) and it agrees with the independent selection result, but a few more
   deaths would firm it up.
-- **Other five characters untested.** Everything in-game was ScavGirl. The roster shapes
-  differ ([00-findings.md:277](00-findings.md#L277)) and Gunhead/Shaman ship a single base
-  skin each, so their `SkinChoices` arrays are shortest.
+- **Other five characters never rendered.** Their *data* is verified — the generator asserts
+  every vanilla roster entry survives `bpadd`, and the counts match
+  ([00-findings.md:277](00-findings.md#L277)) on all six: BagMan 4, Girl 5, Gunhead 1,
+  MaskMan 3, OldMan 2, Shaman 1, each +32. What is untested is whether their menus populate
+  and prune. Gunhead and Shaman ship single-entry `SkinChoices`, the shape most likely to
+  differ. **This is the cheapest open item: one boot, switch character, open the skin menu.**
+- **Octogirl's mesh since the rename.** Her pak was rebuilt as `CMSF_Girl00_octogirl_11_P`
+  and the name change is unconfirmed on screen, as is the mesh applying on select against the
+  real 192-slot framework. Probe 7 proved the mesh channel, but not in this configuration.
 - **Multiplayer.** [03-multiplayer.md](03-multiplayer.md) covers the theory; a CMSF slot has
   not been observed in co-op.
 - **Patch day.** The framework must be rebuilt from each fresh cook. Untested against an
   actual game update.
+
+### Known and accepted, not bugs
+
+- **A claimed slot is hidden for up to one poll (~1 s) after the menu opens**, then appears.
+  The tile's icon still holds a stale pooled texture on first population, so the first prune
+  pass misreads the claim; the bidirectional pass corrects it and logs
+  `restored N claimed CMSF tile(s)`. Deferring the first hide would instead make 31 unclaimed
+  tiles visibly collapse, which is the larger flinch. See
+  [05-v2-distribution.md](05-v2-distribution.md) §"The claim race".
+- **`skin menu open: N skin(s) listed` counts hidden tiles too.** Collapsed tiles are still
+  children of the WrapBox. 39 listed with 8 visible is correct, not a prune failure.
