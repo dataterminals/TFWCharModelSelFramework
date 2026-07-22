@@ -89,7 +89,7 @@ evidence that anything is missing.**
 
 | | |
 |---|---|
-| MO2 instance | `C:\Users\sylvi\AppData\Local\ModOrganizer\The Forever Winter\` |
+| MO2 instance | `%LOCALAPPDATA%\ModOrganizer\The Forever Winter\` |
 | Mod store | `H:\MO2Instance_ModData\ForeverWinter\mods\` |
 | Profile | `Default` |
 | Game | `H:\SteamLibrary\steamapps\common\The Forever Winter` |
