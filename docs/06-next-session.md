@@ -1,19 +1,21 @@
 # Next session — pick up here
 
-Updated 2026-07-21, after the session that **built** v0.2.
+Updated 2026-07-22, after the run that **validated** v0.2 on all six characters.
 
-**Where things stand: v0.2 is built and validated.** Probes 1–9 pass, and everything in §3
-below is done — the framework generator, the author tool, the slot registry and rung 9. The
-framework and an author's claim have run together in-game at full pool depth.
+**Where things stand: v0.2 is built and validated end to end.** Probes 1–9 pass, everything in
+§3 is done — framework generator, author tool, slot registry, rung 9 — and on 2026-07-22 all
+six characters were opened in-game against the real 192-slot framework. Every menu populates
+and prunes; Octogirl's claim renders with her portrait and applies her mesh on select. No Lua
+errors in the run.
 
-What remains is not design work:
+What remains is not design work, and no longer includes any per-character unknown:
 
 - **Release packaging** — `cmsf.exe` for authors (the Nexus `.exe` constraint), and the
-  public-facing copy the README deliberately leaves undrafted.
-- **Runtime gaps** — only ScavGirl has ever been rendered in-game. All six characters are
-  verified in the *data* (the generator now asserts vanilla roster entries survive `bpadd`),
-  but Gunhead and Shaman ship single-entry `SkinChoices` arrays and have never been seen.
+  public-facing copy the README deliberately leaves undrafted. **This is the only thing
+  standing between v0.2 and a release.**
 - **Multiplayer and patch day**, both untested. See §8.
+- **Three unexplained observations** from the validation run — widget accumulation, a claim
+  race at n=4, and per-poll log spam. None fatal, none understood. See §8.
 
 Read this file, then [05-v2-distribution.md](05-v2-distribution.md) for the reasoning. That
 document still contains a long argument for a **placeholder mechanism that should not be
@@ -210,23 +212,40 @@ game mounted.
 booting CMSFUnlock with no CMSF pak at all, after an hour of speculation. When something
 breaks, first establish *whose* bug it is.
 
-## 6. This machine
+## 6. The two machines
 
-| | |
-|---|---|
-| retoc 0.1.5 | `H:\Github Repositories\AllWeaponsUnlockableFix\tools\retoc\retoc.exe` (gitignored, not in this repo) |
-| usmap | `H:\Github Repositories\forever-winter-datamine\datamine\mappings\ForeverWinter-5.4.2.usmap` |
-| game paks | `H:\SteamLibrary\steamapps\common\The Forever Winter\Windows\ForeverWinter\Content\Paks` |
-| AES | `0x84B2244BE0AF90C22976D739FA0665569219F4CEA119CEA37C81F2D9ABEE4795` |
+Both are set up. `cmsf_framework.py` / `cmsf_author.py` locate everything themselves — the
+`find()` helper lists both drives' candidates, so **neither box needs env overrides**. Only
+the older `cmsf_build.py` (v0.1) still hardcodes `D:` and needs `RETOC` / `USMAP` / `FW_PAKS`
+on the desktop; porting `find()` into it is a loose end.
 
-`cmsf_build.py`'s hardcoded defaults point at `D:` and **fail on this box**; override with
-`RETOC` / `USMAP` / `FW_PAKS`. The `build_probe*.py` scripts auto-detect across both drives —
-worth porting that helper into `cmsf_build.py`.
+| | desktop | laptop |
+|---|---|---|
+| retoc 0.1.5 | `H:\Github Repositories\AllWeaponsUnlockableFix\tools\retoc\retoc.exe` | `D:\Github Repositories\HeavyRifleRebalanceFix\tools\retoc\retoc.exe` |
+| usmap | `H:\...\forever-winter-datamine\datamine\mappings\ForeverWinter-5.4.2.usmap` | `D:\...\forever-winter-datamine\datamine\mappings\ForeverWinter-5.4.2.usmap` |
+| game paks | `H:\SteamLibrary\...\Content\Paks` | `D:\SteamLibrary\...\Content\Paks` |
+| MO2 mod store | `H:\MO2Instance_ModData\ForeverWinter\mods` | `D:\MO2_InstanceData\TheForeverWinter\mods` |
+| MO2 itself | — | `C:\Modding\MO2` |
 
-**Deployment is MO2**, mod store at `H:\MO2Instance_ModData\ForeverWinter\mods`. Layout is
-`mods\<Name>\Mods\<pak trio>`, plus `mods\<Name>\Root\Windows\ForeverWinter\Binaries\Win64\ue4ss\Mods\CMSFUnlock\`
-for the Lua side. **MO2 priority decides pak load order**, beating the filename `_N_P` token:
-higher number wins, the column ascends, so the winner sits at the *bottom* of the list.
+AES is the same on both:
+`0x84B2244BE0AF90C22976D739FA0665569219F4CEA119CEA37C81F2D9ABEE4795`
+
+retoc is gitignored and not in this repo on either box.
+
+**Deployment is MO2.** Layout is `mods\<Name>\Mods\<pak trio>`, plus
+`mods\<Name>\Root\Windows\ForeverWinter\Binaries\Win64\ue4ss\Mods\CMSFUnlock\` for the Lua
+side. **MO2 priority decides pak load order**, overriding the filename `_N_P` token entirely:
+`ForeverWinterMO2Support` renames each pak `_<N>_P` with N derived from priority, so a token
+a build tool baked in is discarded. In `modlist.txt` the first line is the highest priority;
+in the MO2 UI that is the *bottom* of the list.
+
+> **MO2 tooling has a prerequisite, and the order is load-bearing.** Bringing the laptop up on
+> 2026-07-21 needed `ForeverWinterMO2Support` upgraded from **`main`** *first*, and only then
+> `TFWWorkbenchMO2Patcher`. The patcher empties `Settings.ModChildDirs`, which is only safe
+> because the plugin pre-creates the DataTable tree in Overwrite — run it against a stale
+> plugin and TFWWorkbench dies with `attempt to index a nil value (local 'modDir')` instead of
+> merely flashing ~160 `cmd.exe` windows per launch. Verify with
+> `CollectData] Collecting data from ...\Mods\TFWWorkbench\DataTable\<dir>` in `UE4SS.log`.
 
 `build/` reads ~180 GB but is almost entirely hardlinks into the Steam install from
 full-mount verification farms; real usage is a few hundred MB. Do not "reclaim" it.
@@ -263,19 +282,40 @@ diagnostic. Do not leave it enabled.
 - **n=2** on the unresolvable-path-in-the-roll observation. The prior is strong (~88% both
   rolls were dead paths) and it agrees with the independent selection result, but a few more
   deaths would firm it up.
-- **Other five characters never rendered.** Their *data* is verified — the generator asserts
-  every vanilla roster entry survives `bpadd`, and the counts match
-  ([00-findings.md:277](00-findings.md#L277)) on all six: BagMan 4, Girl 5, Gunhead 1,
-  MaskMan 3, OldMan 2, Shaman 1, each +32. What is untested is whether their menus populate
-  and prune. Gunhead and Shaman ship single-entry `SkinChoices`, the shape most likely to
-  differ. **This is the cheapest open item: one boot, switch character, open the skin menu.**
-- **Octogirl's mesh since the rename.** Her pak was rebuilt as `CMSF_Girl00_octogirl_11_P`
-  and the name change is unconfirmed on screen, as is the mesh applying on select against the
-  real 192-slot framework. Probe 7 proved the mesh channel, but not in this configuration.
+- ~~**Other five characters never rendered.**~~ **Closed 2026-07-22.** All six were opened
+  in-game on the laptop against the real 192-slot framework: every menu populates and prunes,
+  with no Lua errors in the run. Gunhead and Shaman — the single-entry `SkinChoices` pair,
+  the shape most likely to differ — behave like the rest.
+- ~~**Octogirl's mesh since the rename.**~~ **Closed 2026-07-22.** `CMSF_Girl00_octogirl_11_P`
+  renders with her portrait and the mesh applies on select. The log is unambiguous on the
+  claim itself: exactly one pass logged `hid 31 unclaimed CMSF tile(s)` where every other
+  logged 32, so rung 9 read the claim from the slot's own icon path and declined to prune it.
 - **Multiplayer.** [03-multiplayer.md](03-multiplayer.md) covers the theory; a CMSF slot has
   not been observed in co-op.
 - **Patch day.** The framework must be rebuilt from each fresh cook. Untested against an
   actual game update.
+
+### Surfaced by the 2026-07-22 run — unexplained, none fatal
+
+Read off `UE4SS.log` for a single session in which all six menus were opened. Nothing here
+broke the run, and the operator's summary was "they were all good" — but none of it is
+explained, so do not treat any of it as understood.
+
+- **`hid 128 unclaimed CMSF tile(s)` fired three times.** 128 = 4 x 32, i.e. four characters'
+  worth of tiles pruned in one pass, against single-character passes of 31 and 32 elsewhere in
+  the same run. The working hypothesis is that tile widgets from previously-viewed characters
+  stay instantiated, so a later poll catches several characters at once — which would also
+  explain the operator seeing "a bunch of tiles, then they all vanished once I scrolled".
+  **Unverified.** If it holds, the prune is racing widget accumulation rather than pruning
+  each character in isolation.
+- **`restored 4` fired once**, where the claim race as documented below predicts n=1 (only
+  Octogirl is claimed in this configuration). Four tiles being wrongly hidden and then restored
+  suggests the stale-pooled-texture misread scales with the accumulated widgets, not with the
+  number of real claims.
+- **`skin menu open: N` is logged on every poll** — 33 lines in ~17 seconds, in pairs ~0.1 ms
+  apart, so two widgets are being polled at once. Log on change instead. The pair also has an
+  anomaly worth chasing: 35 and 37 match MaskMan (3+32) and Girl (5+32), but the frequently
+  logged **39 matches no pawn** — no character has 7 vanilla skins.
 
 ### Known and accepted, not bugs
 
@@ -285,5 +325,6 @@ diagnostic. Do not leave it enabled.
   `restored N claimed CMSF tile(s)`. Deferring the first hide would instead make 31 unclaimed
   tiles visibly collapse, which is the larger flinch. See
   [05-v2-distribution.md](05-v2-distribution.md) §"The claim race".
+  **2026-07-22: observed at n=4, not n=1** — see above.
 - **`skin menu open: N skin(s) listed` counts hidden tiles too.** Collapsed tiles are still
   children of the WrapBox. 39 listed with 8 visible is correct, not a prune failure.
