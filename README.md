@@ -3,60 +3,59 @@
 A framework for **appending** player-character skins to *The Forever Winter*'s
 character-select screen, instead of overwriting the finite set of slots the game ships with.
 
-**Status: v0.2 is built and validated in-game. Not yet released.**
+**Status: v0.2 is built, validated in-game, and packaged. Not yet released.**
 
-v0.2 is the shipping design: the user installs a **0.57 MB framework once**, and each skin is
-an ordinary pak trio. No exe on the user's side, no manifest, no re-running a generator when
-skins are added. Probes 1–9 all pass, and the framework and an author's claim have run
-together in-game at full pool depth — see
-[docs/05-v2-distribution.md](docs/05-v2-distribution.md).
+Probes 1–9 all pass, and on 2026-07-22 **all six characters** were opened in-game against the
+real 192-slot framework: every menu populates and prunes, and an author's claim renders with
+its own name, portrait and mesh. See [docs/05-v2-distribution.md](docs/05-v2-distribution.md)
+for the design and probe results, [docs/06-next-session.md](docs/06-next-session.md) for the
+current handoff.
 
 ```bash
-python tools/cmsf_framework.py --slots 32     # the framework users install once
-python tools/cmsf_author.py skins/octogirl    # one skin -> one pak trio
-python tools/cmsf_author.py --list-free Girl  # which slots are unclaimed
+python tools/cmsf_framework.py --slots 32       # the framework users install once
+cmsf-author.exe <skin-dir>                      # one skin -> one pak trio (authors)
+pwsh tools/package-release.ps1                  # the author bundle, guarded
 ```
 
-What remains before release: packaging the author tool as `cmsf.exe`, public-facing copy, and
-the runtime gaps in [docs/06-next-session.md](docs/06-next-session.md) §8 — five of the six
-characters have never been rendered in-game, and multiplayer and patch day are untested.
+**What remains before release:**
 
-**v0.1 still ships** and is not superseded: it remains the rollback path and the unbounded-skin
-mode for users willing to run the generator themselves.
+1. **Make this repo public.** `cmsf-author` fetches the slot registry from the repo's raw URL,
+   so while it is private the collision check degrades to "cannot check" for every author. It
+   fails soft by design, but it is inert until the flip.
+2. Ship it — the Nexus page and release notes are drafted in
+   [docs/08-public-copy.md](docs/08-public-copy.md).
+
+Untested and documented as such: **multiplayer**, and behaviour **across a game patch**.
+
+## The two distribution models
+
+**v0.2 — the shipping design.** The user installs a **0.57 MB framework once**, and each skin
+is an ordinary pak trio. No exe on the user's side, no manifest, no re-running a generator when
+skins are added. The framework permanently owns `DT_SkinUIData` and `BP_Player_*` and
+pre-provisions numbered slots; an author claims one by shipping three packages at its frozen
+paths — a mesh, a portrait and a string table. Higher load order wins all three together, so a
+skin arrives coherently or not at all.
+
+Authors never ship `DT_SkinUIData` or `BP_Player_*`. That is the whole trick, and it is why two
+CMSF skins cannot clobber each other. Authoring guide: [docs/07-authoring-v2.md](docs/07-authoring-v2.md).
+
+**v0.1 — not superseded.** The END USER runs a generator that merges every installed skin into
+one pak. It remains the rollback path, the unbounded-skin mode for users willing to run it, and
+the private/local workflow that needs no slot claim.
 
 ```bash
 python tools/cmsf_build.py --list     # v0.1 — what is registered
 python tools/cmsf_build.py            # -> dist/CMSF/CMSF_9_P.{pak,utoc,ucas}
 ```
 
-Two pieces:
+Both models share `CMSFUnlock`, which is worth having by itself: it makes the game's **own**
+base skins selectable, which vanilla does not allow. Normally, picking a DLC skin strands you
+there until you die in a raid and get randomly reassigned.
 
 | | |
 |---|---|
-| **the generated pak** | appends each registered skin's mesh to the character's roster, and a row to `DT_SkinUIData` for its name/icon |
-| **`CMSFUnlock`** (UE4SS Lua) | unfilters the selector, which vanilla restricts to entitlement-gated DLC skins, **and** hides CMSF slots no author has claimed |
-
-Adding a skin: drop a folder under `skins/` and re-run the build — see
-[docs/04-authoring.md](docs/04-authoring.md).
-
-In v0.1 the **end user** runs the build, because one artifact must merge every installed
-skin. [docs/05-v2-distribution.md](docs/05-v2-distribution.md) inverts that: the framework
-permanently owns `DT_SkinUIData` and `BP_Player_*`, pre-provisions numbered slots, and an
-author claims one by shipping three packages at its frozen paths — a mesh, a portrait and a
-string table. Higher load order wins all three, so a skin arrives coherently or not at all.
-
-Authors never ship `DT_SkinUIData` or `BP_Player_*`. That is the whole trick, and it is why
-two CMSF skins cannot clobber each other.
-
-v0.1 is **not** superseded: it remains the rollback path, the unbounded-skin mode for users
-willing to run the generator, and the private/local workflow that needs no slot claim.
-
-`CMSFUnlock` is worth having by itself: it makes the game's **own** base skins selectable,
-which vanilla does not allow. Normally, picking a DLC skin strands you there until you die
-in a raid and get randomly reassigned.
-
-> Public-facing copy (Nexus page, release notes, announcement) is deliberately not drafted
-> here. This README is the technical record.
+| **the pak** | v0.2 provisions 32 slots per character; v0.1 appends each registered skin's mesh to the roster and a row to `DT_SkinUIData` |
+| **`CMSFUnlock`** (UE4SS Lua) | unfilters the selector, **and** hides CMSF slots no author has claimed |
 
 ## The problem
 
@@ -77,52 +76,66 @@ already ships, and the loader serves yours instead. That approach has hard limit
 
 The game's skin registry turns out to be a plain DataTable whose rows are fully
 self-contained, and **both asset references in a row are soft object paths** — resolved by
-string at load time. So a new row can point at a modder's own assets, at their own paths.
+string at load time. So a new row can point at assets that were never part of the game.
 
 | | Overwrite (today) | Append (CMSF) |
 |---|---|---|
-| Skins per character | capped at slot count | unbounded |
+| Skins per character | capped at slot count | 32 (v0.2 pool) / unbounded (v0.1) |
 | Two mods coexist | no — last one wins | yes — separate rows |
 | Needs the DLC | yes | no |
 | Custom portrait | no | yes (`SkinIcon` is per-row) |
-| `FPackageId` surgery | required | not required |
-| Custom name/description | no | yes (inline `FText`) |
+| Custom name/description | no | yes — string table (v0.2) or inline `FText` (v0.1) |
 
-That last column is the whole point: a modder ships a normal pak containing their own mesh
-and icon at their own paths, plus a small manifest. No identity games, no collisions.
+> **v0.2 still rewrites package identity, deliberately.** v0.1 let a modder keep their own
+> package paths; v0.2 clones into the slot's frozen path *with* a rewritten identity, which is
+> what lets the framework reference a path that exists before any author does. The identity
+> rule below is therefore load-bearing, not avoided.
 
 ## Repo layout
 
 ```
 docs/
-  00-findings.md    what the datamine proves — the registry, the row struct, entitlements
-  01-design.md      injection vectors, the composability constraint, open questions
-  02-poc.md         the experiments that located the real roster
-  03-multiplayer.md what happens to mods in co-op — host authority, and skins as soft paths
-  04-authoring.md   how to register a skin (mod-author facing)
-  05-v2-distribution.md  v0.2: move the build to the author — design + probe results
-  slots.md          the slot registry — who claimed which <Char>/<NN>
-  06-next-session.md     handoff: what is proven, what to build, gotchas, machine setup
+  00-findings.md         what the datamine proves — the registry, the row struct, entitlements
+  01-design.md           injection vectors, the composability constraint, open questions
+  02-poc.md              the experiments that located the real roster
+  03-multiplayer.md      what happens to mods in co-op — host authority, skins as soft paths
+  04-authoring.md        v0.1 authoring. SUPERSEDED for v0.2 — see 07
+  05-v2-distribution.md  v0.2 design + probe results. Contains a long argument for a
+                         placeholder mechanism that probe 6 DISPROVED; marked, but do not skim
+  06-next-session.md     handoff: what is proven, what remains, gotchas, machine setup
+  07-authoring-v2.md     v0.2 authoring (mod-author facing) — the current guide
+  08-public-copy.md      Nexus page, release notes, and what NOT to claim. Draft
+  slots.md               the slot registry — who claimed which <Char>/<NN>
 ```
 ```
-skins/              registered skins, one folder each (skin.json)
+skins/                   v0.1 registered skins, one folder each (skin.json)
+examples/example-skin/   a BUILDABLE example, on private slot 28 — doubles as a setup check
 tools/
-  cmsf_build.py     the v0.1 generator — extract, patch, repack, verify
-  skinpatch/        UAssetAPI: DataTable rows (add / addst) + Blueprint roster (bpadd/bpset)
-  stgen/            generate a CMSF string table — the v0.2 name channel
-  mshgen/           clone any cooked package to a slot path with a NEW package identity
-  stprobe/          probe 1 harness (string table round-trip)
-  mshprobe/         probe 2 harness (mesh round-trip). Does NOT rewrite identity — use mshgen
-  build_probe345.py the name-channel probes
-  build_probe6.py   unresolvable-path behaviour;  build_probe6b.py forces the respawn roll
-  build_probe7.py   end-to-end slot claim, in the shipping shape
-runtime/CMSFUnlock/ UE4SS Lua mod that unfilters the selector
+  cmsf_framework.py      v0.2 — emits the framework pak. Rebuild from every fresh cook
+  cmsf_author.py         v0.2 — one skin -> one pak trio. Reference implementation
+  cmsf-author/           the same tool in C#, published as cmsf-author.exe for authors
+  cmsf_build.py          the v0.1 generator — extract, patch, repack, verify
+  cmsf/                  the v0.1 end-user exe (C#)
+  package-release.ps1    builds the author bundle; REFUSES to ship Oodle or a usmap
+  skinpatch/             UAssetAPI: DataTable rows (add / addst) + roster (bpadd / bpset)
+  stgen/  mshgen/        string-table and package cloning — absorbed into cmsf-author
+  stprobe/  mshprobe/    historical probe harnesses. mshprobe does NOT rewrite identity
+  build_probe*.py        the probe paks, 3-9
+runtime/
+  CMSFUnlock/            UE4SS Lua: unfilters the selector, prunes unclaimed slots
+  CMSFTime/              `cmsftime` — times Init() over N reps, for pool-depth work
+  CMSFProbe9/            the rung-9 probe. Superseded by CMSFUnlock; kept as evidence
 ```
 
 > **The identity rule.** Any tool that clones a cooked package must rewrite its package
 > identity — *both* the name-map entry and `FolderName`. A clone that keeps its template's
 > package name collides by `FPackageId` and the loader serves it in the template's place.
 > See [docs/05-v2-distribution.md](docs/05-v2-distribution.md) §"The identity rule".
+
+> **What must never be redistributed.** `ForeverWinter-*.usmap` (decoded from the game's own
+> type layout) and `oo2core_9_win64.dll` (proprietary Oodle — retoc provisions it itself, and
+> it *will* appear in your build folder). `package-release.ps1` enforces this rather than
+> trusting anyone to remember it.
 
 ## Prior art in this workspace
 
@@ -131,3 +144,10 @@ runtime/CMSFUnlock/ UE4SS Lua mod that unfilters the selector
 - `TFWQuestItemTag` — the proven UE4SS Lua polling pattern for live widget manipulation
 - `FWBehaviorLab` — the static-pak vs UE4SS-runtime vector comparison
 - `tfworkbench-compat-research` — the UE4SS `-894` ABI pin, and why it is load-bearing
+- `ForeverWinterMO2Support` — the MO2 plugin. Under MO2 it rewrites every pak's `_<N>_P`
+  token from left-pane priority, so MO2 order decides load order, not the filename
+
+## Licence
+
+[MIT](LICENSE). Built with [retoc](https://github.com/trumank/retoc) (MIT, Truman Kilen and
+Archengius) and [UE4SS](https://github.com/UE4SS-RE/RE-UE4SS).
