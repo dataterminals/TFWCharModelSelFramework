@@ -310,6 +310,35 @@ One genuine polish item did come out of the run:
 - **`skin menu open: N` is logged on every poll** — 33 lines in ~17 seconds, in pairs ~0.1 ms
   apart. Log on change instead. Purely noise; nothing behavioural.
 
+### Deferred to v0.3 — a default portrait in the AUTHOR's pak
+
+When `skin.json` omits `icon`, have `cmsf-author` clone a CMSF-branded placeholder
+(`assets/icon.svg` art — a "CM/SF" badge) to the slot's icon path instead of hard-erroring.
+
+**This does not violate the sentinel rule, and the distinction is the whole point.** Rung 9
+forbids the **framework** shipping a texture at a slot's own path, because then an *unclaimed*
+slot reads as claimed and never prunes. A default in the **author's** pak is different: that
+slot genuinely is claimed. The framework still ships nothing, so unclaimed slots still prune;
+the claim signal only asks whether a package exists at the path, not what it depicts.
+
+**Blocked on producing one cooked UE5.4 `Texture2D` of our own** — there is no project set up
+to cook in (2026-07-22). Two routes:
+
+- **Cook it once in a UE5.4 project, commit it, embed it in the exe**, then clone it with the
+  existing `Clone.Package`. Needs a `.gitignore` exception, since `*.uasset` is blanket-ignored
+  for copyright reasons that do not apply to our own art. One-time cost, known-good output.
+- ~~Clone a game texture and swap the pixel payload.~~ No editor needed, but it means encoding
+  to the asset's block format, matching dimensions and rebuilding the mip chain — and getting
+  it subtly wrong yields a texture that does not resolve, which is *the exact failure this is
+  meant to remove*.
+
+**Scope it honestly.** A missing `icon` is already a hard error, so the invisible-skin outcome
+is already prevented; this buys the ability to build and test before the art exists, which is
+real because art is usually last. It does **not** close the remaining gap — a supplied but
+badly-cooked texture still builds clean and vanishes, and no build-time check can catch that
+without loading the asset. Emit a NOTE when the placeholder is used, or authors will ship the
+badge without noticing.
+
 ### Known and accepted, not bugs
 
 - **A claimed slot is hidden for up to one poll (~1 s) after the menu opens**, then appears.
