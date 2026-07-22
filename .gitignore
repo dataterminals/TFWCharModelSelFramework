@@ -20,3 +20,5 @@ __pycache__/
 
 # published tool output (rebuild with: dotnet publish tools/cmsf -c Release -o dist/cmsf-tool)
 dist/cmsf-tool/
+# v0.2 author tool (dotnet publish tools/cmsf-author -c Release -o dist/cmsf-author)
+dist/cmsf-author/

@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <!-- -windows for the registry read that locates Steam (Steam.cs, shared with v0.1) -->
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+    <AssemblyName>cmsf-author</AssemblyName>
+    <RootNamespace>CmsfAuthor</RootNamespace>
+
+    <!-- Same constraint as tools/cmsf: Nexus rejects .ps1/.bat but accepts .exe, and a
+         script wrapped in an exe (PS2EXE and friends) gets flagged hard by AV. So this is a
+         real compiled program, published self-contained and single-file — an author needs
+         no .NET runtime, and no Python, which is the whole reason this exists alongside
+         tools/cmsf_author.py rather than replacing it. -->
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <PublishSingleFile>true</PublishSingleFile>
+    <SelfContained>true</SelfContained>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <!-- UAssetAPI resolves types reflectively; trimming would strip what it needs. -->
+    <PublishTrimmed>false</PublishTrimmed>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="UAssetAPI" Version="1.1.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Linked, not copied. Steam detection is identical for v0.1 and v0.2, and a fork
+         would drift the moment either one learns about a new Steam layout. -->
+    <Compile Include="..\cmsf\Steam.cs" Link="Steam.cs" />
+  </ItemGroup>
+</Project>
