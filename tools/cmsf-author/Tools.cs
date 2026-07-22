@@ -72,8 +72,10 @@ static class Tools
             "No .usmap found. Put one next to cmsf-author.exe, or pass --usmap <path>.\n" +
             "  CMSF cannot ship it: a usmap is decoded from the game's own type layout, so\n" +
             "  distributing it would redistribute part of the game. Dump your own once per\n" +
-            "  game version with UE4SS — a DumpUSMAP() call from Lua. You already run UE4SS\n" +
-            "  for CMSFUnlock, so this is not a new dependency.");
+            "  game version with UE4SS, which you already run for CMSFUnlock:\n" +
+            "    Ctrl+Numpad6 in-game, or a DumpUSMAP() call from Lua.\n" +
+            "  The keybind comes from UE4SS's built-in Keybinds mod (enabled by default, and\n" +
+            "  rebindable in its main.lua). DumpUSMAP() works whatever the bind is set to.");
     }
 
     public static string FindPaks(string overridePath)
