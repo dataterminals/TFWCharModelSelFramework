@@ -41,12 +41,16 @@ static class Banner
         catch { return false; }
     }
 
+    // The F sits 2 columns left of where it naturally lands. Butted up letter-by-letter the
+    // S->F gap came out at 3 where C->M and M->S are 0-1, and it read as "CMS F". Pulling it
+    // 3 would over-correct: the top bars merge into one unbroken ________ and row 3 collides
+    // \ with / into a stray V.
     static readonly string[] Art =
     {
-        @"   _____ __  ___ ____   ____",
-        @"  / ___//  |/  // __/  / __/",
-        @" / /__ / /|_/ /_\ \   / _/",
-        @" \___//_/  /_//___/  /_/",
+        @"   _____ __  ___ ____ ____",
+        @"  / ___//  |/  // __// __/",
+        @" / /__ / /|_/ /_\ \ / _/",
+        @" \___//_/  /_//___//_/",
     };
 
     static bool _colour, _unicode;
@@ -70,11 +74,11 @@ static class Banner
             bool last = i == Art.Length - 1;
             if (!_colour)
             {
-                Console.WriteLine(last ? Art[i].PadRight(30) + Subtitle : Art[i]);
+                Console.WriteLine(last ? Art[i].PadRight(28) + Subtitle : Art[i]);
                 continue;
             }
             if (last)
-                Console.WriteLine(Gold + Art[i].PadRight(30) + Reset + Dim + Subtitle + Reset);
+                Console.WriteLine(Gold + Art[i].PadRight(28) + Reset + Dim + Subtitle + Reset);
             else
                 Console.WriteLine(Gold + Art[i] + Reset);
         }
