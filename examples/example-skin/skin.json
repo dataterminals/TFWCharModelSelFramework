@@ -1,0 +1,8 @@
+{
+  "character": "Girl",
+  "slot": "28",
+  "name": "Example Skin",
+  "description": "Built from the bundled example. Swap mesh and icon for your own.",
+  "mesh": "/Game/Character/Scavengers/Female/Skins/OCT/SK_SCV_FL_OCT.SK_SCV_FL_OCT",
+  "icon": "/Game/UI/Textures/MainMenu/Menu/T_Menu_PickCharacter_Portrait_DLC04_Scavgirl.T_Menu_PickCharacter_Portrait_DLC04_Scavgirl"
+}

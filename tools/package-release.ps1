@@ -106,6 +106,18 @@ if (-not (Test-Path $retocLicense)) {
 }
 Copy-Item $retocLicense (Join-Path $staging "licenses\retoc-LICENSE.txt")
 
+# The example is BUILDABLE, not illustrative. Both its sources are /Game/ paths out of the
+# player's own cook, so dragging it onto the exe exercises the entire chain -- usmap, retoc,
+# Steam detection, clone, pack, verify -- and answers "is my setup right" before the author
+# has anything of their own to lose. It claims slot 28, in the private range, so running it
+# can never collide with a published skin.
+$example = Join-Path $repo "examples\example-skin"
+if (-not (Test-Path (Join-Path $example "skin.json"))) {
+    throw "examples\example-skin\skin.json is missing; the bundle would ship an example that does not build"
+}
+New-Item -ItemType Directory -Force -Path (Join-Path $staging "example-skin") | Out-Null
+Copy-Item (Join-Path $example "skin.json") (Join-Path $staging "example-skin")
+
 $readme = @"
 CMSF author tool v$Version
 ==========================
@@ -125,17 +137,38 @@ If Ctrl+Numpad6 does nothing, UE4SS's built-in Keybinds mod is disabled. Set
 "Keybinds : 1" in Binaries\Win64\ue4ss\Mods\mods.txt, editing the line where it
 already sits -- it is last in the file on purpose.
 
+CHECK YOUR SETUP FIRST
+
+    Drag the bundled "example-skin" folder onto cmsf-author.exe.
+
+    It builds a real pak from assets already in your game, so if it works, your
+    usmap, retoc and game detection are all correct and your own skin will build
+    too. It claims slot 28 -- the private range -- so it cannot collide with
+    anyone's published skin. You can install it and see it in game.
+
 QUICK START -- no terminal needed
 
-    Drag your skin folder onto cmsf-author.exe.
+    Drag your own skin folder onto cmsf-author.exe.
 
     Or just double-click cmsf-author.exe and it will ask for the folder. Either
     way the window stays open afterwards so you can read what happened.
+
+skin.json -- copy example-skin\skin.json and edit:
+
+    character     BagMan, Girl, Gunhead, MaskMan, OldMan, Shaman
+    slot          two digits. 00-27 public (claim it first), 28-31 private
+    name          shown in the selector
+    description   shown under the name
+    mesh          a /Game/... path cloned from your own cook, OR a .uasset
+                  file sitting next to skin.json
+    icon          same, and REQUIRED -- a claim with no portrait is not plain,
+                  it is invisible
 
 FROM A TERMINAL, if you prefer
 
     cmsf-author.exe --list-free Girl        what slots are available
     cmsf-author.exe <skin-folder>           build it
+    cmsf-author.exe --menu                  the interactive menu
     cmsf-author.exe --help                  everything else
 
 Full guide: docs/07-authoring-v2.md in the CMSF repo.
