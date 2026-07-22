@@ -43,7 +43,49 @@ static class Tools
             "  Its first run may need an internet connection to fetch Oodle.");
     }
 
-    public static string FindUsmap(string overridePath)
+    /// <summary>
+    /// A note about UE4SS's built-in Keybinds mod, which owns Ctrl+Numpad6 — it registers
+    /// DumpUSMAP, so with it disabled the keystroke does nothing and an author is stuck at the
+    /// one step they cannot skip.
+    ///
+    /// ADVISORY ONLY, and deliberately so. Under MO2 the whole ue4ss tree is virtualised and
+    /// exists in the real game folder only while the game is running, so a missing mods.txt
+    /// proves nothing. It must never be reported as "UE4SS is not installed".
+    /// </summary>
+    static string KeybindHint(string paks)
+    {
+        const string enableIt =
+            "  If Ctrl+Numpad6 does nothing, UE4SS's Keybinds mod is off. In\n" +
+            "  Binaries\\Win64\\ue4ss\\Mods\\mods.txt set `Keybinds : 1`, editing the line where it\n" +
+            "  sits — it is last on purpose (\"do not move up\"), so that legacy binding mods win.\n" +
+            "  Either way DumpUSMAP() from Lua does not depend on the bind at all.";
+        try
+        {
+            // paks is <game>\Windows\ForeverWinter\Content\Paks
+            var fw = Directory.GetParent(paks)?.Parent?.FullName;
+            if (fw == null) return enableIt;
+            var modsTxt = Path.Combine(fw, "Binaries", "Win64", "ue4ss", "Mods", "mods.txt");
+            if (!File.Exists(modsTxt)) return enableIt;
+
+            foreach (var line in File.ReadAllLines(modsTxt))
+            {
+                var t = line.Trim();
+                if (t.StartsWith(';') || !t.StartsWith("Keybinds", StringComparison.OrdinalIgnoreCase)) continue;
+                var parts = t.Split(':');
+                if (parts.Length < 2) continue;
+                return parts[1].Trim() == "1"
+                    ? "  Your UE4SS Keybinds mod is enabled, so Ctrl+Numpad6 should work as-is."
+                    : "  YOUR UE4SS KEYBINDS MOD IS DISABLED, so Ctrl+Numpad6 will do nothing. Set\n" +
+                      "  `Keybinds : 1` in the file below, editing the line where it sits — it is last\n" +
+                      "  on purpose (\"do not move up\"). Or just call DumpUSMAP() from Lua instead.\n" +
+                      $"    {modsTxt}";
+            }
+        }
+        catch { /* advisory only — never fail the build over a diagnostic */ }
+        return enableIt;
+    }
+
+    public static string FindUsmap(string overridePath, string paks = null)
     {
         if (!string.IsNullOrWhiteSpace(overridePath))
         {
@@ -74,8 +116,7 @@ static class Tools
             "  distributing it would redistribute part of the game. Dump your own once per\n" +
             "  game version with UE4SS, which you already run for CMSFUnlock:\n" +
             "    Ctrl+Numpad6 in-game, or a DumpUSMAP() call from Lua.\n" +
-            "  The keybind comes from UE4SS's built-in Keybinds mod (enabled by default, and\n" +
-            "  rebindable in its main.lua). DumpUSMAP() works whatever the bind is set to.");
+            (paks != null ? KeybindHint(paks) : ""));
     }
 
     public static string FindPaks(string overridePath)

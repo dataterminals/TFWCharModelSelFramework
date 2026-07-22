@@ -125,8 +125,10 @@ static class Program
 
         // ---- locate the toolchain ---------------------------------------------------------
         Retoc.Exe = Tools.FindRetoc(a.Retoc);
-        var usmapPath = Tools.FindUsmap(a.Usmap);
+        // Before the usmap, so a missing-usmap error can inspect the author's UE4SS install
+        // and say whether the Keybinds mod that owns Ctrl+Numpad6 is actually enabled.
         var paks = Tools.FindPaks(a.Game);
+        var usmapPath = Tools.FindUsmap(a.Usmap, paks);
 
         var meshObj = $"SK_CMSF_{character}_{slot}";
         var texObj = $"T_CMSF_{character}_{slot}";
