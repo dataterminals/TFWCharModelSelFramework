@@ -22,3 +22,5 @@ __pycache__/
 dist/cmsf-tool/
 # v0.2 author tool (dotnet publish tools/cmsf-author -c Release -o dist/cmsf-author)
 dist/cmsf-author/
+# release bundles (rebuild with: tools/package-release.ps1) — attach to a release, never commit
+dist/release/
