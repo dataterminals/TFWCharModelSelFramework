@@ -48,6 +48,8 @@ static class Program
 
     static int Run(string[] rawArgs)
     {
+        Banner.Write();
+
         var a = Args.Parse(rawArgs);
         if (a.Help) { Usage(); return 0; }
 
