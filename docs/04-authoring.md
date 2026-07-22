@@ -1,4 +1,17 @@
-# Authoring a CMSF skin
+# Authoring a CMSF skin (v0.1)
+
+> **This document describes v0.1**, where the END USER runs a tool that merges every installed
+> skin into one pak. For **v0.2** — you build a pak, users install it directly — see
+> [07-authoring-v2.md](07-authoring-v2.md).
+>
+> They disagree on details that matter, and following the wrong one produces a skin that
+> builds cleanly and never appears. Above all: **v0.1 treats the portrait as optional, and
+> v0.2 does not.** In v0.2 a claim with no portrait is pruned, invisible, indistinguishable
+> from not being installed. The v0.1 `order` field, the free-choice package paths, and the
+> `CMSF.<Character>.<id>` row naming below are all v0.1-only.
+>
+> v0.1 remains supported as the rollback path; §"What ships, and what must not" applies to
+> both.
 
 CMSF adds skins to the character-select screen **without overwriting** any existing slot.
 You do not need to own a DLC, you do not need to give up a slot, and your skin gets its own
