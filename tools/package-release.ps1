@@ -125,7 +125,14 @@ If Ctrl+Numpad6 does nothing, UE4SS's built-in Keybinds mod is disabled. Set
 "Keybinds : 1" in Binaries\Win64\ue4ss\Mods\mods.txt, editing the line where it
 already sits -- it is last in the file on purpose.
 
-QUICK START
+QUICK START -- no terminal needed
+
+    Drag your skin folder onto cmsf-author.exe.
+
+    Or just double-click cmsf-author.exe and it will ask for the folder. Either
+    way the window stays open afterwards so you can read what happened.
+
+FROM A TERMINAL, if you prefer
 
     cmsf-author.exe --list-free Girl        what slots are available
     cmsf-author.exe <skin-folder>           build it

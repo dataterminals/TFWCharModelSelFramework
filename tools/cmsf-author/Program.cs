@@ -41,6 +41,9 @@ static class Program
     {
         try { return Run(rawArgs); }
         catch (BuildError e) { Console.Error.WriteLine($"\nERROR: {e.Message}"); return 1; }
+        // Launched from Explorer, the window closes the instant this returns and takes the
+        // result with it. Pause on success AND failure — failure is when there is most to read.
+        finally { Interactive.PauseIfOwned(); }
     }
 
     static int Run(string[] rawArgs)
@@ -69,7 +72,19 @@ static class Program
             return 0;
         }
 
-        if (a.SkinDir == null) { Usage(); throw new BuildError("a skin directory is required (or use --list-free CHAR)"); }
+        if (a.SkinDir == null)
+        {
+            // Double-clicked with nothing to go on. Printing usage at someone who has no
+            // terminal to type it into is not help, so ask.
+            if (!Interactive.OwnsConsole)
+            {
+                Usage();
+                throw new BuildError("a skin directory is required (or use --list-free CHAR)");
+            }
+            a.SkinDir = Interactive.AskForSkinFolder();
+            if (string.IsNullOrWhiteSpace(a.SkinDir))
+                throw new BuildError("no skin folder given, so there is nothing to build.");
+        }
 
         // ---- skin.json --------------------------------------------------------------------
         var skinDir = Path.GetFullPath(a.SkinDir);

@@ -73,6 +73,20 @@ waiting on a merge to test something locally.
 
 ## If two skins collide anyway
 
-The user sees whichever pak loads higher, and the other skin is absent — no crash, no
-corruption, no damage to anything else. The fix is for one author to rebuild against a free
-slot. Nothing on the user's side needs repairing beyond installing the new pak.
+One skin shows and the other is absent — no crash, no corruption, no damage to anything else.
+The fix is for one author to rebuild against a free slot. Nothing on the user's side needs
+repairing beyond installing the new pak.
+
+**Which one wins is not something you can influence, so do not try.** Every CMSF author pak
+carries the same `_11_P` load-order token — the build tool sets it, precisely so nobody gets
+it wrong against the framework's `_9_P`. Two paks claiming one slot therefore mount at the
+*same* Order, and the winner falls to the engine's tiebreak: the alphabetically **lowest**
+filename. Since the names are `CMSF_<Char><NN>_<id>_11_P`, that means the author `id` decides
+it — `CMSF_Girl00_aardvark_11_P` beats `CMSF_Girl00_zebra_11_P`.
+
+So renaming your pak is not a fix. Claiming a free slot is the only fix.
+
+> Under MO2 none of the above applies: the
+> [ForeverWinterMO2Support](https://github.com/dataterminals/ForeverWinterMO2Support) plugin
+> rewrites the token from left-pane priority, so the user's mod order decides and the baked-in
+> `_11_P` is discarded.

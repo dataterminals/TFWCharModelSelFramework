@@ -112,12 +112,22 @@ cooked assets.
 
 ### 3. Build
 
+**Drag your skin folder onto `cmsf-author.exe`.** Or double-click it and it will ask for the
+folder. The window stays open afterwards either way, so you can read the result.
+
+From a terminal, if you prefer:
+
 ```bash
 cmsf-author skins/ash-runner
 ```
 
 Out comes `CMSF_Girl07_ash-runner_11_P.{pak,utoc,ucas}` in `./dist/ash-runner/`. The tool
 decodes its own output back out to check it before declaring success.
+
+> The `_11_P` in that filename is the load-order token, and the tool sets it — it is what
+> makes your pak beat the framework's `_9_P`. **Do not rename the pak.** It also means every
+> author's pak carries the same token, so on a slot collision the winner is decided by an
+> alphabetical tiebreak you cannot influence. Claiming a free slot is the only fix.
 
 ### 4. Install and test
 
