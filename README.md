@@ -3,18 +3,29 @@
 A framework for **appending** player-character skins to *The Forever Winter*'s
 character-select screen, instead of overwriting the finite set of slots the game ships with.
 
-**Status: v0.1 ships. v0.2 is validated in-game but not yet built.**
+**Status: v0.2 is built and validated in-game. Not yet released.**
 
-v0.1 works today: custom skins appear in the character-select screen with their own name,
-description and portrait, alongside the vanilla ones. The end user runs the generator.
-
-v0.2 inverts that — the user installs a ~1 MB framework once, and each skin is an ordinary
-pak trio. Every mechanism it needs was proven in-game on 2026-07-21 (probes 1–8, see
-[docs/05-v2-distribution.md](docs/05-v2-distribution.md)); what remains is writing the
-generator. See [docs/06-next-session.md](docs/06-next-session.md) for the handoff.
+v0.2 is the shipping design: the user installs a **0.57 MB framework once**, and each skin is
+an ordinary pak trio. No exe on the user's side, no manifest, no re-running a generator when
+skins are added. Probes 1–9 all pass, and the framework and an author's claim have run
+together in-game at full pool depth — see
+[docs/05-v2-distribution.md](docs/05-v2-distribution.md).
 
 ```bash
-python tools/cmsf_build.py --list     # what is registered
+python tools/cmsf_framework.py --slots 32     # the framework users install once
+python tools/cmsf_author.py skins/octogirl    # one skin -> one pak trio
+python tools/cmsf_author.py --list-free Girl  # which slots are unclaimed
+```
+
+What remains before release: packaging the author tool as `cmsf.exe`, public-facing copy, and
+the runtime gaps in [docs/06-next-session.md](docs/06-next-session.md) §8 — five of the six
+characters have never been rendered in-game, and multiplayer and patch day are untested.
+
+**v0.1 still ships** and is not superseded: it remains the rollback path and the unbounded-skin
+mode for users willing to run the generator themselves.
+
+```bash
+python tools/cmsf_build.py --list     # v0.1 — what is registered
 python tools/cmsf_build.py            # -> dist/CMSF/CMSF_9_P.{pak,utoc,ucas}
 ```
 
@@ -23,7 +34,7 @@ Two pieces:
 | | |
 |---|---|
 | **the generated pak** | appends each registered skin's mesh to the character's roster, and a row to `DT_SkinUIData` for its name/icon |
-| **`CMSFUnlock`** (UE4SS Lua) | unfilters the selector, which vanilla restricts to entitlement-gated DLC skins |
+| **`CMSFUnlock`** (UE4SS Lua) | unfilters the selector, which vanilla restricts to entitlement-gated DLC skins, **and** hides CMSF slots no author has claimed |
 
 Adding a skin: drop a folder under `skins/` and re-run the build — see
 [docs/04-authoring.md](docs/04-authoring.md).
