@@ -51,15 +51,29 @@ static class Tools
             return overridePath;
         }
         var beside = Directory.Exists(ExeDir)
-            ? Directory.GetFiles(ExeDir, "*.usmap").OrderBy(f => f).FirstOrDefault()
-            : null;
-        if (beside != null) return beside;
+            ? Directory.GetFiles(ExeDir, "*.usmap").OrderBy(f => f, StringComparer.Ordinal).ToList()
+            : new List<string>();
+
+        if (beside.Count == 1) return beside[0];
+
+        // NEVER guess between several. The obvious tie-breaks are both wrong: sorting by name
+        // picks ForeverWinter-5.4.2 over 5.5.0, i.e. the STALE one, exactly when an author has
+        // just re-dumped after a patch; and mtime lies about which cook a file describes. A
+        // stale usmap does not fail loudly — it misreads the new type layout and yields a bad
+        // package, so this refuses rather than picking.
+        if (beside.Count > 1)
+            throw new BuildError(
+                $"{beside.Count} .usmap files sit next to cmsf-author.exe and I will not guess between them:\n" +
+                string.Join("\n", beside.Select(f => "    " + Path.GetFileName(f))) + "\n" +
+                "  Pass --usmap <path>, or leave only the one matching your installed game version.\n" +
+                "  A usmap from a different version does not error — it silently builds a bad package.");
 
         throw new BuildError(
             "No .usmap found. Put one next to cmsf-author.exe, or pass --usmap <path>.\n" +
             "  CMSF cannot ship it: a usmap is decoded from the game's own type layout, so\n" +
             "  distributing it would redistribute part of the game. Dump your own once per\n" +
-            "  game version with UE4SS — Ctrl+Numpad6, or a Lua DumpUSMAP() call.");
+            "  game version with UE4SS — a DumpUSMAP() call from Lua. You already run UE4SS\n" +
+            "  for CMSFUnlock, so this is not a new dependency.");
     }
 
     public static string FindPaks(string overridePath)
