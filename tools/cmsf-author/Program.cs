@@ -233,8 +233,15 @@ static class Program
                                  ".cmsf-build", ident);
         var src = Path.Combine(build, "src");
         var stage = Path.Combine(build, "stage");
-        foreach (var d in new[] { stage, outDir }) if (Directory.Exists(d)) Directory.Delete(d, true);
+
+        // stage is ours, under .cmsf-build, so wiping it is safe.
+        if (Directory.Exists(stage)) Directory.Delete(stage, true);
+
+        // outDir is NOT ours -- it is whatever --out was pointed at. Deleting it recursively
+        // turned `--out .` into "erase the folder I am standing in", so only our own previous
+        // pak trio is removed and anything else in there is left alone.
         Directory.CreateDirectory(outDir);
+        foreach (var stale in Directory.GetFiles(outDir, pak + ".*")) File.Delete(stale);
         Directory.CreateDirectory(src);
 
         var mappings = new Usmap(usmapPath);

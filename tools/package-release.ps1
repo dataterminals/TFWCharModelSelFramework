@@ -1,36 +1,44 @@
 <#
 .SYNOPSIS
-    Build the CMSF author release zip, and refuse to ship anything that must not be
-    redistributed.
+    Build the CMSF release zips -- one for players, one for skin authors -- and refuse to ship
+    anything that must not be redistributed.
 
 .DESCRIPTION
-    Publishes cmsf-author as a self-contained single-file exe, assembles the bundle from an
-    explicit ALLOWLIST, then scans the result against a DENYLIST and fails if anything
-    forbidden appears.
+    Emits two bundles:
+
+      CMSF-v<ver>.zip            what a PLAYER installs: the framework pak + CMSFUnlock,
+                                 laid out so the whole Windows\ folder drops onto the game root
+      CMSF-author-v<ver>.zip     what a SKIN AUTHOR runs: cmsf-author.exe + retoc + an example
+
+    Each is assembled from an explicit ALLOWLIST, then scanned against a DENYLIST and rejected
+    if anything forbidden appears.
 
     The denylist is the whole reason this script exists. retoc provisions Oodle itself, so
-    oo2core_9_win64.dll appears inside the retoc folder the first time you build anything,
-    and the obvious way to package a release (zip the folder) therefore redistributes
-    proprietary Epic code. Likewise a .usmap is decoded from the game's own type layout.
-    Both are listed in docs/04-authoring.md as things CMSF must never ship, and both would
-    otherwise be prevented only by remembering.
+    oo2core_9_win64.dll appears in the folder the first time anything is built -- OBSERVED
+    2026-07-22, in the release folder, from a single example build -- and the obvious way to
+    package a release (zip the folder) therefore ships proprietary Epic code. Likewise a .usmap
+    is decoded from the game's own type layout. Both are named in docs/04-authoring.md as
+    things CMSF must never ship, and both would otherwise be prevented only by remembering.
 
-    Two nets on purpose: the allowlist controls what goes in, the denylist catches what the
-    allowlist did not anticipate (a future retoc layout, an added copy step, a stray build
-    artefact).
+    Two nets: the allowlist controls what goes in, the denylist catches what the allowlist did
+    not anticipate (a future retoc layout, an added copy step, a stray build artefact).
 
-    ASCII ONLY, deliberately. Windows PowerShell 5.1 reads a UTF-8 file with no BOM as ANSI,
-    so a stray em dash in a comment turns into a parser error rather than a typo.
+    ASCII ONLY, deliberately. Windows PowerShell 5.1 reads a UTF-8 file with no BOM as ANSI, so
+    a stray em dash in a comment is a parser error rather than a typo.
 
 .PARAMETER Retoc
-    Path to retoc.exe. Auto-detected across the known dev machines if omitted. retoc is MIT
-    and IS redistributable, with attribution, so its LICENSE ships beside it.
+    Path to retoc.exe. Auto-detected across the known dev machines if omitted. retoc is MIT and
+    IS redistributable, with attribution, so its LICENSE ships beside it.
+
+.PARAMETER Framework
+    Folder holding the built framework pak trio. Defaults to dist\framework. Build it with:
+        python tools/cmsf_framework.py --slots 32
 
 .PARAMETER Version
     Version string used in the folder and zip names.
 
 .PARAMETER OutDir
-    Where to write the staging folder and zip. Defaults to dist/release.
+    Where to write staging folders and zips. Defaults to dist\release.
 
 .EXAMPLE
     .\tools\package-release.ps1
@@ -40,15 +48,17 @@
 [CmdletBinding()]
 param(
     [string]$Retoc,
+    [string]$Framework,
     [string]$Version = "0.2.0",
     [string]$OutDir
 )
 
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
-if (-not $OutDir) { $OutDir = Join-Path $repo "dist\release" }
+if (-not $OutDir)    { $OutDir    = Join-Path $repo "dist\release" }
+if (-not $Framework) { $Framework = Join-Path $repo "dist\framework" }
 
-# --- things that must never reach a public release ---------------------------------------
+# --- never redistributable, in any bundle --------------------------------------------------
 # Pattern -> why, so a failure explains itself rather than just naming a file.
 $Forbidden = [ordered]@{
     'oo2core*.dll' = 'proprietary Oodle (RAD/Epic). retoc fetches it on first run; never ship it'
@@ -56,10 +66,75 @@ $Forbidden = [ordered]@{
     '*.uasset'     = 'cooked game asset'
     '*.uexp'       = 'cooked game asset'
     '*.ubulk'      = 'cooked game asset'
-    '*.pak'        = 'game or mod content pak'
-    '*.utoc'       = 'game or mod content pak'
-    '*.ucas'       = 'game or mod content pak'
     '*.pdb'        = 'debug symbols; not harmful, just not wanted in a release'
+}
+# Content paks are legitimate in the PLAYER bundle and never in the author one, so they are
+# checked separately against the one directory they are allowed to occupy.
+$PakExts = @('.pak', '.utoc', '.ucas')
+
+function Test-Bundle {
+    param([string]$Staging, [string]$PaksAllowedUnder)
+
+    $violations = @()
+    foreach ($pattern in $Forbidden.Keys) {
+        foreach ($hit in (Get-ChildItem $Staging -Recurse -File -Filter $pattern -ErrorAction SilentlyContinue)) {
+            $violations += ("  {0}`n      {1}" -f $hit.FullName.Replace("$Staging\", ""), $Forbidden[$pattern])
+        }
+    }
+    foreach ($hit in (Get-ChildItem $Staging -Recurse -File -ErrorAction SilentlyContinue)) {
+        if ($hit.Extension -notin $PakExts) { continue }
+        $rel = $hit.FullName.Replace("$Staging\", "")
+        if (-not $PaksAllowedUnder) {
+            $violations += ("  {0}`n      a content pak has no business in the author bundle" -f $rel)
+        } elseif ($rel -notlike "$PaksAllowedUnder*") {
+            $violations += ("  {0}`n      content pak outside {1} -- it would not load from there" -f $rel, $PaksAllowedUnder)
+        }
+    }
+    if ($violations.Count -gt 0) {
+        Remove-Item $Staging -Recurse -Force
+        throw ("REFUSING TO PACKAGE. The bundle contains files that must not be redistributed:`n" +
+               ($violations -join "`n") + "`n`nStaging folder deleted so it cannot be shipped by hand.")
+    }
+}
+
+function New-Zip {
+    param([string]$Staging, [string]$Zip)
+
+    if (Test-Path $Zip) { Remove-Item $Zip -Force }
+    Compress-Archive -Path $Staging -DestinationPath $Zip -CompressionLevel Optimal
+
+    # Never trust the archive. Compare it against staging by name AND size: an early run of
+    # this script produced a well-formed 2.6 MB zip with the 38 MB exe silently MISSING,
+    # because a smoke test still held the image, and reported success.
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $archive = [System.IO.Compression.ZipFile]::OpenRead($Zip)
+    try {
+        $inZip = @{}
+        foreach ($e in $archive.Entries) { if ($e.Length -gt 0) { $inZip[(Split-Path $e.FullName -Leaf)] = $e.Length } }
+    } finally { $archive.Dispose() }
+
+    $bad = @()
+    foreach ($f in (Get-ChildItem $Staging -Recurse -File)) {
+        if ($f.Length -eq 0) { continue }        # zero-byte markers carry no size to compare
+        if (-not $inZip.ContainsKey($f.Name)) { $bad += "  MISSING  $($f.Name)" }
+        elseif ($inZip[$f.Name] -ne $f.Length) {
+            $bad += ("  SIZE     {0}: staged {1:N0} B, in zip {2:N0} B" -f $f.Name, $f.Length, $inZip[$f.Name])
+        }
+    }
+    if ($bad.Count -gt 0) {
+        Remove-Item $Zip -Force
+        throw ("the zip does not match the staging folder:`n" + ($bad -join "`n") +
+               "`n`nZip deleted. This is usually a file still locked by another process.")
+    }
+}
+
+function Show-Bundle {
+    param([string]$Staging, [string]$Zip)
+    Get-ChildItem $Staging -Recurse -File | ForEach-Object {
+        "    {0,-58} {1,8:N0} KB" -f $_.FullName.Replace("$Staging\", ""), ($_.Length / 1KB)
+    }
+    Write-Host ("  -> {0}  ({1:N2} MB)" -f (Split-Path $Zip -Leaf), ((Get-Item $Zip).Length / 1MB)) -ForegroundColor Green
+    Write-Host ""
 }
 
 function Find-Retoc {
@@ -76,49 +151,160 @@ function Find-Retoc {
     throw "retoc.exe not found. Pass -Retoc with a path. It is gitignored and not in this repo."
 }
 
-# --- publish -------------------------------------------------------------------------------
-$name    = "CMSF-author-v$Version"
-$staging = Join-Path $OutDir $name
-$zip     = Join-Path $OutDir "$name.zip"
+# =============================================================================================
+#  1. THE PLAYER BUNDLE
+# =============================================================================================
+Write-Host "==> player bundle" -ForegroundColor Cyan
 
-Write-Host "==> publishing cmsf-author" -ForegroundColor Cyan
-if (Test-Path $staging) { Remove-Item $staging -Recurse -Force }
-if (Test-Path $zip)     { Remove-Item $zip -Force }
-New-Item -ItemType Directory -Force -Path $staging, (Join-Path $staging "licenses") | Out-Null
+$userName    = "CMSF-v$Version"
+$userStaging = Join-Path $OutDir $userName
+$userZip     = Join-Path $OutDir "$userName.zip"
+if (Test-Path $userStaging) { Remove-Item $userStaging -Recurse -Force }
+
+$paks = Get-ChildItem $Framework -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.Extension -in $PakExts -and $_.BaseName -like "CMSF_Core_*" }
+if ($paks.Count -lt 3) {
+    throw ("no framework pak trio in $Framework (found $($paks.Count) file(s)).`n" +
+           "  Build it first:  python tools/cmsf_framework.py --slots 32`n" +
+           "  It must be rebuilt from the CURRENT cook -- a stale DT_SkinUIData deletes the" +
+           " developers' new rows.")
+}
+
+# Mirror the install tree so the player drops one folder onto the game root and every piece
+# lands where it has to be. Getting CMSFUnlock into the wrong directory is silent: the pak
+# still loads, provisions every slot, and nothing prunes them.
+$relPaks   = "Windows\ForeverWinter\Content\Paks\Mods"
+$relUnlock = "Windows\ForeverWinter\Binaries\Win64\ue4ss\Mods\CMSFUnlock"
+New-Item -ItemType Directory -Force -Path (Join-Path $userStaging $relPaks),
+                                         (Join-Path $userStaging "$relUnlock\Scripts") | Out-Null
+
+$paks | ForEach-Object { Copy-Item $_.FullName (Join-Path $userStaging $relPaks) }
+
+$unlockSrc = Join-Path $repo "runtime\CMSFUnlock"
+Copy-Item (Join-Path $unlockSrc "Scripts\main.lua") (Join-Path $userStaging "$relUnlock\Scripts")
+# UE4SS starts a Lua mod only if it is listed in mods.txt or ships this marker. Without it the
+# mod never starts and says nothing about it -- the exact failure TFWWorkbenchMO2Patcher exists
+# to fix for someone else's mod. Assert rather than create, so the repo stays the source.
+$marker = Join-Path $unlockSrc "enabled.txt"
+if (-not (Test-Path $marker)) {
+    throw ("runtime\CMSFUnlock\enabled.txt is missing. Without it UE4SS never starts CMSFUnlock" +
+           " and gives no error, so the framework would provision every slot with nothing to prune them.")
+}
+Copy-Item $marker (Join-Path $userStaging $relUnlock)
+
+Copy-Item (Join-Path $repo "LICENSE") (Join-Path $userStaging "LICENSE.txt")
+
+$userReadme = @"
+CMSF v$Version -- Character Model Selection Framework
+====================================================
+
+Adds new character skins to the select screen instead of overwriting the ones the
+game ships with. It also unlocks the base skins the game already has but never
+lets you pick, which is worth having even with no skin mods installed.
+
+INSTALLING
+
+  Copy the "Windows" folder from this archive into your game folder, so it merges
+  with the one already there:
+
+      ...\steamapps\common\The Forever Winter\
+
+  That puts two things in place:
+
+      Windows\ForeverWinter\Content\Paks\Mods\        the framework pak
+      Windows\...\Binaries\Win64\ue4ss\Mods\CMSFUnlock\   the runtime
+
+  The Mods\ folder may not exist yet -- copying the Windows folder in creates it.
+
+  Launch, pick a character, open the skin menu.
+
+  MOD ORGANIZER 2 USERS: do not copy anything into the game folder. Install this
+  archive as an ordinary MO2 mod instead. MO2 virtualises both of those
+  directories, so files copied in by hand are not what the game sees.
+
+REQUIREMENTS
+
+  UE4SS            tested against 3.0.1-894. You likely have it already.
+  Signature Bypass required for any content pak mod, not just this one.
+
+ADDING SKINS
+
+  A CMSF skin is an ordinary pak you drop in the same Mods\ folder. Skin paks
+  MUST load after the framework -- their filenames already carry the right
+  load-order token, so do not rename them.
+
+  Mod Organizer 2: MO2 priority decides load order and overrides the filename,
+  so put skins ABOVE the framework in the left pane.
+
+NOT BUGS
+
+  * A skin can be missing for about a second when the menu first opens, then
+    appear. The game reuses tile widgets across panels, so the first pass reads a
+    stale image. It corrects itself.
+  * Empty slots do not show. The framework provisions many; you only ever see
+    ones a skin actually claimed.
+
+IF A SKIN YOU INSTALLED IS NOT SHOWING
+
+  Almost always load order -- the skin pak has to load AFTER the framework. Open
+  the console and type  cmsfnoprune  to show every slot including empty ones. If
+  yours reads "CMSF SLOT NN UNCLAIMED", the pak is not loading, or is loading
+  before the framework.
+
+UNINSTALLING
+
+  Delete the files. If you were wearing a CMSF skin the game rolls you onto a
+  normal one next time you die. Nothing to repair.
+
+CMSF is MIT licensed. Built with UE4SS (https://github.com/UE4SS-RE/RE-UE4SS).
+"@
+Set-Content -Path (Join-Path $userStaging "README.txt") -Value $userReadme -Encoding UTF8
+
+Test-Bundle -Staging $userStaging -PaksAllowedUnder $relPaks
+New-Zip -Staging $userStaging -Zip $userZip
+Show-Bundle -Staging $userStaging -Zip $userZip
+
+# =============================================================================================
+#  2. THE AUTHOR BUNDLE
+# =============================================================================================
+Write-Host "==> author bundle" -ForegroundColor Cyan
+
+$authName    = "CMSF-author-v$Version"
+$authStaging = Join-Path $OutDir $authName
+$authZip     = Join-Path $OutDir "$authName.zip"
+if (Test-Path $authStaging) { Remove-Item $authStaging -Recurse -Force }
+New-Item -ItemType Directory -Force -Path $authStaging, (Join-Path $authStaging "licenses") | Out-Null
 
 $publish = Join-Path $OutDir ".publish"
 if (Test-Path $publish) { Remove-Item $publish -Recurse -Force }
 dotnet publish (Join-Path $repo "tools\cmsf-author") -c Release -o $publish -v q --nologo
 if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed" }
 
-# --- assemble, from an explicit allowlist --------------------------------------------------
-Write-Host "==> assembling bundle" -ForegroundColor Cyan
 $retocPath = Find-Retoc -Explicit $Retoc
 $retocDir  = Split-Path $retocPath
 
-Copy-Item (Join-Path $publish "cmsf-author.exe") $staging
-Copy-Item $retocPath $staging
-Copy-Item (Join-Path $repo "LICENSE") (Join-Path $staging "LICENSE.txt")
+Copy-Item (Join-Path $publish "cmsf-author.exe") $authStaging
+Copy-Item $retocPath $authStaging
+Copy-Item (Join-Path $repo "LICENSE") (Join-Path $authStaging "LICENSE.txt")
 
 $retocLicense = Join-Path $retocDir "LICENSE"
 if (-not (Test-Path $retocLicense)) {
     throw "retoc LICENSE not found beside $retocPath. retoc is MIT and REQUIRES the notice to ship with it."
 }
-Copy-Item $retocLicense (Join-Path $staging "licenses\retoc-LICENSE.txt")
+Copy-Item $retocLicense (Join-Path $authStaging "licenses\retoc-LICENSE.txt")
 
 # The example is BUILDABLE, not illustrative. Both its sources are /Game/ paths out of the
-# player's own cook, so dragging it onto the exe exercises the entire chain -- usmap, retoc,
-# Steam detection, clone, pack, verify -- and answers "is my setup right" before the author
-# has anything of their own to lose. It claims slot 28, in the private range, so running it
-# can never collide with a published skin.
+# author's own cook, so dragging it onto the exe exercises the entire chain -- usmap, retoc,
+# Steam detection, clone, pack, verify -- and answers "is my setup right" before the author has
+# anything of their own to lose. Slot 28 is in the private range, so it can never collide.
 $example = Join-Path $repo "examples\example-skin"
 if (-not (Test-Path (Join-Path $example "skin.json"))) {
     throw "examples\example-skin\skin.json is missing; the bundle would ship an example that does not build"
 }
-New-Item -ItemType Directory -Force -Path (Join-Path $staging "example-skin") | Out-Null
-Copy-Item (Join-Path $example "skin.json") (Join-Path $staging "example-skin")
+New-Item -ItemType Directory -Force -Path (Join-Path $authStaging "example-skin") | Out-Null
+Copy-Item (Join-Path $example "skin.json") (Join-Path $authStaging "example-skin")
 
-$readme = @"
+$authReadme = @"
 CMSF author tool v$Version
 ==========================
 
@@ -150,8 +336,8 @@ QUICK START -- no terminal needed
 
     Drag your own skin folder onto cmsf-author.exe.
 
-    Or just double-click cmsf-author.exe and it will ask for the folder. Either
-    way the window stays open afterwards so you can read what happened.
+    Or just double-click cmsf-author.exe and it will ask what you want to do.
+    Either way the window stays open so you can read what happened.
 
 skin.json -- copy example-skin\skin.json and edit:
 
@@ -180,29 +366,13 @@ NOTES
   * This exe is unsigned, so Windows SmartScreen will say "unknown publisher"
     once. More info -> Run anyway.
 "@
-Set-Content -Path (Join-Path $staging "README.txt") -Value $readme -Encoding UTF8
+Set-Content -Path (Join-Path $authStaging "README.txt") -Value $authReadme -Encoding UTF8
 
-# --- the guard -----------------------------------------------------------------------------
-Write-Host "==> checking nothing forbidden is in the bundle" -ForegroundColor Cyan
-$violations = @()
-foreach ($pattern in $Forbidden.Keys) {
-    $hits = Get-ChildItem $staging -Recurse -File -Filter $pattern -ErrorAction SilentlyContinue
-    foreach ($hit in $hits) {
-        $rel = $hit.FullName.Replace("$staging\", "")
-        $violations += ("  {0}`n      {1}" -f $rel, $Forbidden[$pattern])
-    }
-}
-if ($violations.Count -gt 0) {
-    Remove-Item $staging -Recurse -Force
-    throw ("REFUSING TO PACKAGE. The bundle contains files that must not be redistributed:`n" +
-           ($violations -join "`n") + "`n`nStaging folder deleted so it cannot be shipped by hand.")
-}
+Test-Bundle -Staging $authStaging -PaksAllowedUnder $null
 
-# --- prove the exe actually runs ------------------------------------------------------------
-# Deliberately run the PUBLISH copy, not the staged one. A single-file exe extracts itself to
-# temp on launch and Windows can hold the image briefly after exit; running the staged copy
-# left Compress-Archive unable to read it, which produced a 2.6 MB zip with the 38 MB exe
-# silently MISSING, and the script still reported success.
+# Smoke-test the PUBLISH copy, not the staged one. A single-file exe extracts itself to temp on
+# launch and Windows can hold the image after exit; running the staged copy left
+# Compress-Archive unable to read it and produced a zip with the exe silently missing.
 Write-Host "==> smoke-testing the published exe" -ForegroundColor Cyan
 $out = & (Join-Path $publish "cmsf-author.exe") --help 2>&1 | Out-String
 if ($LASTEXITCODE -ne 0 -or $out -notmatch "cmsf-author") {
@@ -210,41 +380,9 @@ if ($LASTEXITCODE -ne 0 -or $out -notmatch "cmsf-author") {
            "installed is worse than no release.`n$out")
 }
 
-# --- zip -------------------------------------------------------------------------------------
-Write-Host "==> zipping" -ForegroundColor Cyan
-Compress-Archive -Path $staging -DestinationPath $zip -CompressionLevel Optimal
-
-# Never trust the archive. Compare it against staging by name AND size, because the failure
-# mode above was a well-formed zip that was simply missing its largest file.
-Add-Type -AssemblyName System.IO.Compression.FileSystem
-$archive = [System.IO.Compression.ZipFile]::OpenRead($zip)
-try {
-    $inZip = @{}
-    foreach ($e in $archive.Entries) {
-        if ($e.Length -gt 0) { $inZip[(Split-Path $e.FullName -Leaf)] = $e.Length }
-    }
-} finally { $archive.Dispose() }
-
-$missing = @()
-foreach ($f in (Get-ChildItem $staging -Recurse -File)) {
-    if (-not $inZip.ContainsKey($f.Name)) { $missing += "  MISSING  $($f.Name)" }
-    elseif ($inZip[$f.Name] -ne $f.Length) {
-        $missing += ("  SIZE     {0}: staged {1:N0} B, in zip {2:N0} B" -f $f.Name, $f.Length, $inZip[$f.Name])
-    }
-}
-if ($missing.Count -gt 0) {
-    Remove-Item $zip -Force
-    throw ("the zip does not match the staging folder:`n" + ($missing -join "`n") +
-           "`n`nZip deleted. This is usually a file still locked by another process.")
-}
+New-Zip -Staging $authStaging -Zip $authZip
 Remove-Item $publish -Recurse -Force
+Show-Bundle -Staging $authStaging -Zip $authZip
 
-Write-Host ""
-Get-ChildItem $staging -Recurse -File | ForEach-Object {
-    "    {0,-32} {1,8:N0} KB" -f $_.FullName.Replace("$staging\", ""), ($_.Length / 1KB)
-}
-Write-Host ""
-Write-Host ("done -> {0}  ({1:N2} MB, {2} files verified)" -f $zip, ((Get-Item $zip).Length / 1MB), $inZip.Count) -ForegroundColor Green
-Write-Host ""
 Write-Host "Before publishing: the slot registry is fetched from the repo raw URL, so the" -ForegroundColor Yellow
 Write-Host "collision check stays INERT until that repo is public. Flip it first." -ForegroundColor Yellow

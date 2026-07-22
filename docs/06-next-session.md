@@ -10,8 +10,13 @@ errors in the run.
 
 What remains is not design work, and no longer includes any per-character unknown:
 
-- **Release packaging** — `cmsf.exe` for authors (the Nexus `.exe` constraint), and the
-  public-facing copy the README deliberately leaves undrafted. **This is the only thing
+- ~~**Release packaging.**~~ **Done 2026-07-22.** `tools/cmsf-author/` is the author tool as a
+  self-contained exe, and [tools/package-release.ps1](../tools/package-release.ps1) emits both
+  bundles — the player's (framework pak + `CMSFUnlock`, laid out to drop on the game root) and
+  the author's (`cmsf-author.exe` + retoc + a buildable example). Public copy is drafted in
+  [08-public-copy.md](08-public-copy.md).
+- **Making this repo public** — `cmsf-author` fetches the registry from the repo's raw URL, so
+  the collision check is inert for every author until the flip. **This is now the only thing
   standing between v0.2 and a release.**
 - **Multiplayer and patch day**, both untested. See §8.
 - **One polish item** — `skin menu open` logs on every poll rather than on change. See §8.
@@ -91,8 +96,11 @@ paks survive every framework rebase untouched.
 2. ~~**Author tool.**~~ **Done** — [tools/cmsf_author.py](../tools/cmsf_author.py). Takes a
    `skin.json` plus a claimed slot and emits exactly three packages at the slot's frozen
    paths. Sources may be `/Game/` paths cloned out of the live cook, or the author's own
-   cooked `.uasset` files. Still to do: package it as `cmsf.exe` for authors — see the Nexus
-   `.exe` constraint in the repo's prior art.
+   cooked `.uasset` files. **Packaged 2026-07-22** as
+   [tools/cmsf-author/](../tools/cmsf-author/) — the same tool in C#, published self-contained
+   and single-file, because Nexus rejects `.ps1`/`.bat` and a script wrapped in an exe gets
+   flagged hard by AV. The Python stays the reference implementation: the two were shown to
+   produce a **byte-identical** Octogirl pak across `.pak`, `.utoc` and `.ucas`.
 
    **The portrait is mandatory, and the tool enforces it.** Rung 9 decides a slot is
    unclaimed by checking whether its icon resolves to the slot's own path, so a claim

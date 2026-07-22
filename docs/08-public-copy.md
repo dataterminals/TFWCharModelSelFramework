@@ -57,11 +57,18 @@ no config file, no re-running a generator when you add one.**
 
 ### Installing
 
-1. Put `CMSF_Core_9_P.pak`, `.utoc` and `.ucas` in
-   `The Forever Winter\Windows\ForeverWinter\Content\Paks\Mods\`
-2. Put the `CMSFUnlock` folder in
-   `The Forever Winter\Windows\ForeverWinter\Binaries\Win64\ue4ss\Mods\`
-3. Launch. Pick a character, open the skin menu.
+Copy the **`Windows`** folder from the archive into your game folder, so it merges with the
+one already there:
+
+```
+...\steamapps\common\The Forever Winter\
+```
+
+That puts the framework pak in `Content\Paks\Mods\` and `CMSFUnlock` in
+`Binaries\Win64\ue4ss\Mods\` in one step. Launch, pick a character, open the skin menu.
+
+> **Mod Organizer 2 users: do not copy anything into the game folder.** Install the archive as
+> an ordinary MO2 mod instead, and see the load-order note below.
 
 Skin mods go in the same `Mods\` folder as the framework, and **must load after it** — their
 filenames already carry the right load-order token, so do not rename them.
