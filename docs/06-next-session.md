@@ -14,8 +14,7 @@ What remains is not design work, and no longer includes any per-character unknow
   public-facing copy the README deliberately leaves undrafted. **This is the only thing
   standing between v0.2 and a release.**
 - **Multiplayer and patch day**, both untested. See §8.
-- **Three unexplained observations** from the validation run — widget accumulation, a claim
-  race at n=4, and per-poll log spam. None fatal, none understood. See §8.
+- **One polish item** — `skin menu open` logs on every poll rather than on change. See §8.
 
 Read this file, then [05-v2-distribution.md](05-v2-distribution.md) for the reasoning. That
 document still contains a long argument for a **placeholder mechanism that should not be
@@ -295,27 +294,21 @@ diagnostic. Do not leave it enabled.
 - **Patch day.** The framework must be rebuilt from each fresh cook. Untested against an
   actual game update.
 
-### Surfaced by the 2026-07-22 run — unexplained, none fatal
+### The 2026-07-22 log reproduced the measured claim race exactly
 
-Read off `UE4SS.log` for a single session in which all six menus were opened. Nothing here
-broke the run, and the operator's summary was "they were all good" — but none of it is
-explained, so do not treat any of it as understood.
+`hid 128` / `restored 4` / `hid 31` all recurred, and they are **already explained** — see
+[05-v2-distribution.md](05-v2-distribution.md) §"The claim race", measured 2026-07-21.
+`WBP_SkinButton_C` instances are pooled across the **four ready-room panels**, so 128 is
+32 x 4 and `restored 4` is one claim x 4 panels. Reproducing them on a second machine is
+confirmation, not a new finding.
 
-- **`hid 128 unclaimed CMSF tile(s)` fired three times.** 128 = 4 x 32, i.e. four characters'
-  worth of tiles pruned in one pass, against single-character passes of 31 and 32 elsewhere in
-  the same run. The working hypothesis is that tile widgets from previously-viewed characters
-  stay instantiated, so a later poll catches several characters at once — which would also
-  explain the operator seeing "a bunch of tiles, then they all vanished once I scrolled".
-  **Unverified.** If it holds, the prune is racing widget accumulation rather than pruning
-  each character in isolation.
-- **`restored 4` fired once**, where the claim race as documented below predicts n=1 (only
-  Octogirl is claimed in this configuration). Four tiles being wrongly hidden and then restored
-  suggests the stale-pooled-texture misread scales with the accumulated widgets, not with the
-  number of real claims.
+> Do not re-derive these from a one-panel-per-character model — it predicts the wrong numbers
+> and makes ordinary behaviour look anomalous. The panel count is the thing to reason from.
+
+One genuine polish item did come out of the run:
+
 - **`skin menu open: N` is logged on every poll** — 33 lines in ~17 seconds, in pairs ~0.1 ms
-  apart, so two widgets are being polled at once. Log on change instead. The pair also has an
-  anomaly worth chasing: 35 and 37 match MaskMan (3+32) and Girl (5+32), but the frequently
-  logged **39 matches no pawn** — no character has 7 vanilla skins.
+  apart. Log on change instead. Purely noise; nothing behavioural.
 
 ### Known and accepted, not bugs
 
@@ -324,7 +317,8 @@ explained, so do not treat any of it as understood.
   pass misreads the claim; the bidirectional pass corrects it and logs
   `restored N claimed CMSF tile(s)`. Deferring the first hide would instead make 31 unclaimed
   tiles visibly collapse, which is the larger flinch. See
-  [05-v2-distribution.md](05-v2-distribution.md) §"The claim race".
-  **2026-07-22: observed at n=4, not n=1** — see above.
+  [05-v2-distribution.md](05-v2-distribution.md) §"The claim race". The logged counts are
+  **per panel, not per character** — `restored 4` is one claim across the four ready-room
+  panels, which is the expected shape, not a scaled-up race. Reproduced 2026-07-22.
 - **`skin menu open: N skin(s) listed` counts hidden tiles too.** Collapsed tiles are still
   children of the WrapBox. 39 listed with 8 visible is correct, not a prune failure.
