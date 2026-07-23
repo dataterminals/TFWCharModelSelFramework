@@ -17,7 +17,11 @@
     <PublishSingleFile>true</PublishSingleFile>
     <SelfContained>true</SelfContained>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
-    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <!-- Compression is OFF deliberately. A self-extracting COMPRESSED exe is close to the
+         textbook signature of a runtime packer, which is what heuristic AV flags. Leaving the
+         embedded payload uncompressed costs ~15-20 MB of download but makes the binary look
+         far less like malware, which is the whole reason this bundle is hosted off Nexus. -->
+    <EnableCompressionInSingleFile>false</EnableCompressionInSingleFile>
     <!-- UAssetAPI resolves types reflectively; trimming would strip what it needs. -->
     <PublishTrimmed>false</PublishTrimmed>
     <InvariantGlobalization>true</InvariantGlobalization>
