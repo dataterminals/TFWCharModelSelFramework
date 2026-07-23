@@ -10,16 +10,18 @@
 // per-skin names, unlimited skins, and no reserved-slot pool with empty entries that are
 // (as tested) both visible AND selectable.
 //
-// WHY THE .usmap IS NOT BUNDLED
-// It is decoded from the game's own type layout — copyright-derived data. Shipping it would
-// mean redistributing part of the game. Users dump their own from their own copy; the tool
-// explains how. They already run UE4SS for CMSFUnlock, so the dependency is not new.
+// WHY NEITHER THE .usmap NOR THE AES KEY IS BUNDLED
+// Both are game-derived. The .usmap is decoded from the game's own type layout, and the pak
+// AES key is the game's own decryption key — shipping either would mean redistributing part of
+// the game. Users supply their own: dump the usmap with UE4SS (Ctrl+Numpad6), and put the AES
+// key in fw_aes.txt beside the exe or in FW_AES_KEY. They already run UE4SS for CMSFUnlock, so
+// the dependency is not new.
 using System.Diagnostics;
 using System.Text.Json;
 
 static class Program
 {
-    const string AES = "0x84B2244BE0AF90C22976D739FA0665569219F4CEA119CEA37C81F2D9ABEE4795";
+    static string AES;   // the game's pak key, resolved by ResolveAes() before the first extract
 
     // Load order: for a "*_P.pak", the token between the LAST TWO underscores is parsed as
     // the chunk version (N -> N+1; PakOrder += 100 * CVN). A numeric PREFIX is inert.
@@ -128,6 +130,29 @@ static class Program
         return null;
     }
 
+    // The game's pak AES key, never bundled. FW_AES_KEY, then an fw_aes.txt beside the exe.
+    static string ResolveAes()
+    {
+        var key = Environment.GetEnvironmentVariable("FW_AES_KEY");
+        if (string.IsNullOrWhiteSpace(key))
+        {
+            var f = FindBeside("fw_aes.txt", "aes.txt", "aes.key");
+            if (f != null) key = File.ReadAllText(f).Trim();
+        }
+        key = key?.Trim();
+        if (string.IsNullOrWhiteSpace(key))
+            throw new Exception(
+                "no game AES key. CMSF does not ship it — it is the game's own pak decryption\n" +
+                "  key, the same reason it does not ship a usmap. Put it in fw_aes.txt next to\n" +
+                "  this exe, or set the FW_AES_KEY environment variable. UE4SS can dump it, or\n" +
+                "  take it from the usual community key database. It is 0x + 64 hex digits.");
+        if (!key.StartsWith("0x", StringComparison.OrdinalIgnoreCase)) key = "0x" + key;
+        var hex = key[2..];
+        if (hex.Length != 64 || !hex.All(Uri.IsHexDigit))
+            throw new Exception($"the AES key looks wrong: expected 0x + 64 hex digits, got '{key}'");
+        return key;
+    }
+
     static int Run(List<string> extraDirs, bool listOnly)
     {
         // ---- inputs --------------------------------------------------------------------
@@ -206,6 +231,7 @@ static class Program
         Directory.CreateDirectory(src);
         Directory.CreateDirectory(staged);
 
+        AES = ResolveAes();   // resolved here so --list and --help never require the key
         Console.WriteLine("\n==> extracting from the installed game");
         foreach (var f in byChar.Keys.Select(c => Characters[c]).Append("DT_SkinUIData"))
             Exec(retoc, ["-a", AES, "to-legacy", "--version", "UE5_4", "-f", f, game.Paks, src]);

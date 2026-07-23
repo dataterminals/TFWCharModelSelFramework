@@ -46,8 +46,10 @@ import subprocess
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import fwlocate  # noqa: E402  (local module, beside this script)
+
 ROOT = Path(__file__).resolve().parent.parent
-AES = "0x84B2244BE0AF90C22976D739FA0665569219F4CEA119CEA37C81F2D9ABEE4795"
 CHARACTERS = ["BagMan", "Girl", "Gunhead", "MaskMan", "OldMan", "Shaman"]
 
 # Must match tools/cmsf_framework.py exactly: the framework's row references this namespace
@@ -58,28 +60,8 @@ ST_KEY_NAME, ST_KEY_DESC = "Name", "Desc"
 PAK_ORDER = 11
 
 
-def find(env, candidates, what):
-    v = os.environ.get(env)
-    if v and Path(v).exists():
-        return v
-    for c in candidates:
-        if Path(c).exists():
-            return c
-    sys.exit(f"could not locate {what}; set ${env}")
-
-
-RETOC = find("RETOC", [
-    r"H:\Github Repositories\AllWeaponsUnlockableFix\tools\retoc\retoc.exe",
-    r"D:\Github Repositories\HeavyRifleRebalanceFix\tools\retoc\retoc.exe",
-], "retoc.exe")
-USMAP = find("USMAP", [
-    r"H:\Github Repositories\forever-winter-datamine\datamine\mappings\ForeverWinter-5.4.2.usmap",
-    r"D:\Github Repositories\forever-winter-datamine\datamine\mappings\ForeverWinter-5.4.2.usmap",
-], "the usmap")
-PAKS = find("FW_PAKS", [
-    r"H:\SteamLibrary\steamapps\common\The Forever Winter\Windows\ForeverWinter\Content\Paks",
-    r"D:\SteamLibrary\steamapps\common\The Forever Winter\Windows\ForeverWinter\Content\Paks",
-], "the game's Paks directory")
+# Resolved lazily in main(), after --list-free returns — listing slots needs no toolchain.
+RETOC = USMAP = PAKS = None
 
 
 def run(cmd, quiet=False):
@@ -134,7 +116,7 @@ def resolve_source(value, skin_dir, src, kind):
     """Return a .uasset path to clone from, extracting out of the live cook if needed."""
     if value.startswith("/Game/"):
         obj = value.split(".")[-1]
-        run([RETOC, "-a", AES, "to-legacy", "--version", "UE5_4", "-f", obj, PAKS, src],
+        run([RETOC, "-a", fwlocate.aes(), "to-legacy", "--version", "UE5_4", "-f", obj, PAKS, src],
             quiet=True)
         rel = game_to_rel(value)
         f = src / rel
@@ -231,6 +213,10 @@ def main():
                  "plain: CMSFUnlock treats an icon that does not resolve to the slot's own "
                  "path as proof the slot is unclaimed, and prunes the tile.")
 
+    # All input is validated; only now locate the toolchain (--list-free needs none of it).
+    global RETOC, USMAP, PAKS
+    RETOC, USMAP, PAKS = fwlocate.retoc(), fwlocate.usmap(), fwlocate.paks()
+
     mesh_obj, tex_obj, st_obj = (f"SK_CMSF_{char}_{slot}", f"T_CMSF_{char}_{slot}",
                                  f"ST_CMSF_{char}_{slot}")
     sd = f"ForeverWinter/Content/CMSF/{char}/{slot}"
@@ -270,7 +256,7 @@ def main():
     # The string table is cloned from the game's own, never from the author's assets.
     st_tpl = src / "ForeverWinter/Content/FW/UI/StringTables/ST_FW_UI_Skins.uasset"
     if not st_tpl.is_file():
-        run([RETOC, "-a", AES, "to-legacy", "--version", "UE5_4", "-f", "ST_FW_UI_Skins",
+        run([RETOC, "-a", fwlocate.aes(), "to-legacy", "--version", "UE5_4", "-f", "ST_FW_UI_Skins",
              PAKS, src], quiet=True)
     if not st_tpl.is_file():
         sys.exit("could not extract ST_FW_UI_Skins from the cook")
@@ -296,7 +282,7 @@ def main():
     for f in out.glob(f"{pak}.*"):
         shutil.copy(f, vsrc / f.name)
     for filt in (mesh_obj, tex_obj, st_obj, "DT_SkinUIData", f"BP_Player_{char}"):
-        run([RETOC, "-a", AES, "to-legacy", "--version", "UE5_4", "-f", filt, vsrc, vout],
+        run([RETOC, "-a", fwlocate.aes(), "to-legacy", "--version", "UE5_4", "-f", filt, vsrc, vout],
             quiet=True)
 
     problems = []

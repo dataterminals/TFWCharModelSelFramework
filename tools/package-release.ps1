@@ -27,7 +27,7 @@
     a stray em dash in a comment is a parser error rather than a typo.
 
 .PARAMETER Retoc
-    Path to retoc.exe. Auto-detected across the known dev machines if omitted. retoc is MIT and
+    Path to retoc.exe. If omitted, looked for in tools\retoc\ and on PATH. retoc is MIT and
     IS redistributable, with attribution, so its LICENSE ships beside it.
 
 .PARAMETER Framework
@@ -63,6 +63,8 @@ if (-not $Framework) { $Framework = Join-Path $repo "dist\framework" }
 $Forbidden = [ordered]@{
     'oo2core*.dll' = 'proprietary Oodle (RAD/Epic). retoc fetches it on first run; never ship it'
     '*.usmap'      = 'decoded from the game own type layout; shipping it redistributes part of the game'
+    'fw_aes.txt'   = 'the game pak AES key; the game own decryption key, supplied per-author, never shipped'
+    'aes.key'      = 'a pak AES key file; never ship it'
     '*.uasset'     = 'cooked game asset'
     '*.uexp'       = 'cooked game asset'
     '*.ubulk'      = 'cooked game asset'
@@ -144,11 +146,13 @@ function Find-Retoc {
         return (Resolve-Path $Explicit).Path
     }
     $candidates = @(
-        "H:\Github Repositories\AllWeaponsUnlockableFix\tools\retoc\retoc.exe",
-        "D:\Github Repositories\HeavyRifleRebalanceFix\tools\retoc\retoc.exe"
+        (Join-Path $PSScriptRoot "retoc\retoc.exe"),   # tools\retoc\retoc.exe
+        (Join-Path $repo "tools\retoc\retoc.exe")
     )
     foreach ($c in $candidates) { if (Test-Path $c) { return $c } }
-    throw "retoc.exe not found. Pass -Retoc with a path. It is gitignored and not in this repo."
+    $onPath = (Get-Command retoc.exe -ErrorAction SilentlyContinue).Source
+    if ($onPath) { return $onPath }
+    throw "retoc.exe not found. Put it in tools\retoc\, add it to PATH, or pass -Retoc <path>. It is gitignored and not in this repo."
 }
 
 # =============================================================================================
@@ -311,13 +315,17 @@ CMSF author tool v$Version
   cmsf-author.exe   builds one skin into one pak trio
   retoc.exe         used internally; MIT, (c) Truman Kilen and Archengius
 
-BEFORE YOU START, put a .usmap in this folder.
+BEFORE YOU START, put two things from your own copy of the game in this folder:
+a .usmap, and the pak AES key.
 
-CMSF cannot ship one: a usmap is decoded from the game's own type layout, so
-distributing it would redistribute part of the game. Dump your own from your own
-copy, once per game version, with UE4SS, which you already run for CMSFUnlock:
+CMSF ships neither -- both are game-derived. Supply your own, once per game version:
 
-    Ctrl+Numpad6 in-game, or a DumpUSMAP() call from Lua.
+  usmap    Decoded from the game's own type layout. Dump it with UE4SS, which you
+           already run for CMSFUnlock:
+               Ctrl+Numpad6 in-game, or a DumpUSMAP() call from Lua.
+  AES key  The game's own pak decryption key. Put it in fw_aes.txt next to
+           cmsf-author.exe (or set the FW_AES_KEY environment variable). UE4SS can
+           dump it, or take it from the usual community key database for your build.
 
 If Ctrl+Numpad6 does nothing, UE4SS's built-in Keybinds mod is disabled. Set
 "Keybinds : 1" in Binaries\Win64\ue4ss\Mods\mods.txt, editing the line where it
@@ -384,5 +392,5 @@ New-Zip -Staging $authStaging -Zip $authZip
 Remove-Item $publish -Recurse -Force
 Show-Bundle -Staging $authStaging -Zip $authZip
 
-Write-Host "Before publishing: the slot registry is fetched from the repo raw URL, so the" -ForegroundColor Yellow
-Write-Host "collision check stays INERT until that repo is public. Flip it first." -ForegroundColor Yellow
+Write-Host "Reminder: authors supply their own usmap and AES key (FW_AES_KEY or fw_aes.txt);" -ForegroundColor Yellow
+Write-Host "CMSF ships neither. The slot-collision check reads the published registry." -ForegroundColor Yellow

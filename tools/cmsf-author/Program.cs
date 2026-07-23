@@ -212,6 +212,9 @@ static class Program
                               $"before publishing, or use {SlotRegistry.PrivateFrom:D2}..31 for a private skin.");
 
         // ---- locate the toolchain ---------------------------------------------------------
+        // The AES key first: it is the game's own decryption key, so a missing one should stop
+        // the build before anything spawns, and --list-free never reaches here.
+        Tools.Aes = Tools.FindAes(a.Aes);
         Retoc.Exe = Tools.FindRetoc(a.Retoc);
         // Before the usmap, so a missing-usmap error can inspect the author's UE4SS install
         // and say whether the Keybinds mod that owns Ctrl+Numpad6 is actually enabled.
@@ -361,6 +364,7 @@ static class Program
           --pool-slots N     depth of the installed framework, for a sanity check (default 32)
           --unregistered     silence the note about an unregistered public slot
           --out DIR          where to write the pak trio (default ./dist/<id>)
+          --aes KEY          game pak AES key; default is FW_AES_KEY, then fw_aes.txt beside the exe
           --usmap PATH       the .usmap; default is any *.usmap beside this exe
           --game PATH        the game folder; default is Steam auto-detection
           --retoc PATH       retoc.exe; default is beside this exe, then PATH
@@ -378,7 +382,7 @@ static class Program
 
     class Args
     {
-        public string SkinDir, Slot, ListFree, Out, Usmap, Game, Retoc, Registry;
+        public string SkinDir, Slot, ListFree, Out, Usmap, Game, Retoc, Registry, Aes;
         public int PoolSlots = 32;
         public bool Unregistered, Help, Menu;
 
@@ -402,6 +406,7 @@ static class Program
                     case "--usmap": a.Usmap = Next("--usmap"); break;
                     case "--game": a.Game = Next("--game"); break;
                     case "--retoc": a.Retoc = Next("--retoc"); break;
+                    case "--aes": a.Aes = Next("--aes"); break;
                     case "--registry": a.Registry = Next("--registry"); break;
                     case "--menu": a.Menu = true; break;
                     case "-h" or "--help": a.Help = true; break;

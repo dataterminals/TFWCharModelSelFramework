@@ -1,411 +1,223 @@
-# Findings — how TFW drives the skin selection screen
+# How The Forever Winter drives skin selection
 
-**Provenance.** All facts below were decoded from the shipped paks on 2026-07-20.
+Everything here was decoded from the shipped paks (UE 5.4.2) with the
+[`forever-winter-datamine`](https://github.com/dataterminals/forever-winter-datamine) CUE4Parse
+decoder and the game's own `.usmap`. Anything not confirmed by an in-game observation is called
+out as an inference; the rest was read directly out of a dump or watched happening in-game.
 
-| | |
-|---|---|
-| Game build | `24097213` (Steam `buildid`; paks dated 2026-07-07) |
-| Engine | UE 5.4.2 |
-| Mappings | `ForeverWinter-5.4.2.usmap` |
-| Paks | `H:\SteamLibrary\steamapps\common\The Forever Winter\Windows\ForeverWinter\Content\Paks` |
-| Tool | `forever-winter-datamine` → `python -m fwdata get <name>` (prebuilt `fwextract.exe`) |
-| Files mounted | 76,589 |
-
-> Caveat: `fwdata` stamps its cache dir and catalogs from a **hardcoded** `GAME_BUILD` in
-> `fwdata/version.py`, which still reads `24045295` and was never bumped after the
-> 2026-07-07 patch. The dumps below were decoded from the live paks and are current for
-> `24097213`; only the cache label is stale. Also note `fwdata/paths.py` hardcodes a `D:`
-> paks path, so `FW_PAKS` must be exported on this machine.
-
-Reproduce with:
+To reproduce a dump:
 
 ```bash
-cd "H:/Github Repositories/forever-winter-datamine"
-export FW_PAKS="H:/SteamLibrary/steamapps/common/The Forever Winter/Windows/ForeverWinter/Content/Paks"
 python -m fwdata get "DT_SkinUIData,DT_Entitlements,DT_EntitlementTags,DD_Player_,WBP_SkinSelection,GA_Player_ChangeSkin"
 ```
 
-Claims are tagged **[VERIFIED]** (read directly out of a dump) or **[INFERRED]** (a
-reasonable reading that has *not* been tested in-game). Do not promote an inferred claim
-without an experiment.
+## The short version
 
----
+A selectable skin needs **two** things, in two different places:
 
-## 1. ~~There is exactly one skin registry~~ — CORRECTED 2026-07-20
+1. its mesh present in the character's **roster** — `SkinChoices` / `LockedSkinChoices` on the
+   pawn Blueprint's `FWSkinChangeComponent` (§"The roster"), and
+2. a **`DT_SkinUIData` row** whose `Skin` path points at that mesh, supplying the display name,
+   description and portrait (§"The presentation table").
 
-> **This section's headline was wrong.** `DT_SkinUIData` is the **presentation** table —
-> it supplies a skin's display name and icon. It is **not** the roster, and appending rows
-> to it does not make a skin available. The real roster lives on each character's pawn
-> Blueprint; see **§7**. Everything below about the table's *structure* is accurate and
-> still matters, because a CMSF skin does need a row here to be named and pictured. It is
-> necessary, not sufficient.
->
-> Proven in-game: with our two extra rows confirmed live in the table (35 rows), the
-> selector still offered exactly the vanilla set.
+The selector iterates table rows and shows a row when its `Skin` path is in the character's
+roster — not the other way round. Neither half alone appears. `DT_SkinUIData` is **not** the
+roster, and appending a row to it does not by itself make a skin available; that was the first
+wrong assumption this project corrected, proven by a live table with extra rows the selector
+still ignored.
 
-`/Game/FW/Player/Data/DT_SkinUIData` — 33 rows, RowStruct `Class'SkinDetails'` from
-`/Script/FWGameCore`.
+Both asset references in a row are **soft object paths**, resolved by string at load, so a row
+can point at assets that were never part of the game — which is the whole reason appending is
+possible without package-identity surgery.
 
-Searching all 76,589 packaged file paths for `skin` returns only two data assets:
+## The presentation table — `DT_SkinUIData`
 
-```
-ForeverWinter/Content/FW/Player/Data/DT_SkinUIData.uasset
-ForeverWinter/Content/FW/UI/StringTables/ST_FW_UI_Skins.uasset   (localization only)
-```
+`/Game/FW/Player/Data/DT_SkinUIData`, RowStruct `SkinDetails` from `/Script/FWGameCore`. A
+search of all packaged paths for `skin` returns only this table and one localisation string
+table (`ST_FW_UI_Skins`); there is no second registry. It supplies a skin's **name and icon**,
+keyed off the mesh path, and nothing else — the character definitions (`DD_Player_*`) carry no
+skin data at all.
 
-There is **no** per-character skin roster asset, and no second registry. This one table
-gates every selectable skin in the game.
+`FSkinDetails` has four fields, and both asset refs are soft:
 
-Supporting negative result: `DD_Player_Girl` (the Scav Girl character definition) contains
-no skin array whatsoever. Its entire `UIData` is two fields:
-
-```json
-{
-  "CharacterImage":     { "AssetPathName": ".../T_Menu_PickCharacter_Portrait_ScavGirl...", "SubPathString": "" },
-  "CharacterNickname":  { "Namespace": "", "Key": "8E1E...", "SourceString": "Scav Girl" }
-}
-```
-
-The character definition knows nothing about skins.
-
-## 2. The row struct is self-contained, and the asset refs are soft **[VERIFIED]**
-
-`FSkinDetails` has four fields:
-
-| Field | Type | Notes |
+| Field | Type | Role |
 |---|---|---|
 | `SkinName` | `FText` | string-table ref **or** inline literal |
 | `SkinDetails` | `FText` | description; same |
 | `SkinIcon` | `FSoftObjectPath` | character-select portrait |
 | `Skin` | `FSoftObjectPath` | skeletal mesh |
 
-A base row, using the string table:
+A base row uses the string table; a recent DLC row uses **inline literal `FText`** with no
+string-table entry required:
 
 ```json
 "ScavGirl0": {
   "SkinName":    { "TableId": "/Game/FW/UI/StringTables/ST_FW_UI_Skins.ST_FW_UI_Skins",
                    "Key": "Skin_AllChars_Default_01_Name", "SourceString": "Default Skin 1" },
-  "SkinDetails": { "TableId": "...", "Key": "Skin_AllChars_Default_01_Desc" },
-  "SkinIcon":    { "AssetPathName": "/Game/UI/Textures/MainMenu/Menu/T_Menu_PickCharacter_Portrait_ScavGirl.T_Menu_PickCharacter_Portrait_ScavGirl", "SubPathString": "" },
-  "Skin":        { "AssetPathName": "/Game/Character/Scavengers/Female/SK_SCV_FL.SK_SCV_FL", "SubPathString": "" }
+  "SkinIcon":    { "AssetPathName": "/Game/UI/Textures/MainMenu/Menu/T_Menu_PickCharacter_Portrait_ScavGirl.T_Menu_PickCharacter_Portrait_ScavGirl" },
+  "Skin":        { "AssetPathName": "/Game/Character/Scavengers/Female/SK_SCV_FL.SK_SCV_FL" }
 }
-```
 
-A recent DLC row, using **inline literal FText** — no string-table entry required:
-
-```json
 "Skin.Girl.MAY": {
   "SkinName":    { "Namespace": "", "Key": "007683904154CDB942807086A1D0CF64", "SourceString": "Scav Female May" },
-  "SkinDetails": { "Namespace": "", "Key": "58C31E4A4F326138C6D0308C4F8247DD", "SourceString": "May 2026 Female SKin" },
-  "SkinIcon":    { "AssetPathName": ".../T_Menu_PickCharacter_Portrait_DLC04_Scavgirl...", "SubPathString": "" },
-  "Skin":        { "AssetPathName": "/Game/Character/Scavengers/Female/Skins/MAY/SK_SCV_FL_May.SK_SCV_FL_May", "SubPathString": "" }
+  "SkinIcon":    { "AssetPathName": ".../T_Menu_PickCharacter_Portrait_DLC04_Scavgirl..." },
+  "Skin":        { "AssetPathName": "/Game/Character/Scavengers/Female/Skins/MAY/SK_SCV_FL_May.SK_SCV_FL_May" }
 }
 ```
 
-**Three consequences, and they are the reason this project is worth doing:**
+Three consequences, and they are why appending is worth doing:
 
-1. `Skin` and `SkinIcon` are **soft object paths — resolved by string at load**. A new row
-   may point at any package path, including one that only exists inside a mod's own pak.
-   No `FPackageId` collision engineering, no `fwrepath`, no `FolderName` header patching.
-2. `SkinIcon` is **per-row**, so an appended skin gets a correct custom portrait. The
+1. `Skin` and `SkinIcon` are **soft paths resolved by string at load**, so a row may point at a
+   package that only exists inside a mod's own pak — no `FPackageId` collision engineering, no
+   repathing, no `FolderName` header patching.
+2. `SkinIcon` is **per-row**, so an appended skin gets its own correct portrait. The
    "thumbnail lies" defect of the overwrite approach does not exist here.
-3. `SkinName`/`SkinDetails` accept **inline literals**, proven by the DLC rows. A mod
-   supplies its own display name and description without touching `ST_FW_UI_Skins`.
+3. `SkinName` / `SkinDetails` accept **inline literals** (proven by the DLC rows), so a mod
+   supplies its own name and description without touching `ST_FW_UI_Skins`.
 
-**There is no entitlement, ownership, DLC, or owning-character field in the row struct.**
+There is no entitlement, ownership, DLC, or owning-character field anywhere in the row struct.
 
-## 3. The 33 rows, and two naming conventions **[VERIFIED]**
+### Two naming conventions
 
-```
-Bagman0  Bagman1  Bagman2  Bagman3  BagmanMNG
-ScavGirl0  ScavGirl1  ScavGirl2  ScavGirl3  ScavGirl4  ScavGirlSPT  ScavGirlDec2025
-OldMan0  OldMan1  OldManWaterTheif  OldManBER
-MaskMan0  MaskMan1  MaskMan2  MaskManCIC  MaskManAnniversary
-Shaman0  ShamanDogHead  ShamanDec2025
-GunheadFLF  GunheadDec2025
-Skin.Maskman.April2026.LHD  Skin.Gunhead.DSQ  Skin.Shaman.DSQ  Skin.Girl.DSQ
-Skin.Girl.MAY  Skin.Gunhead.May  Skin.Shaman.May
-```
+The 33 shipped rows use two eras of convention, and they disagree on the character token:
 
-Two eras of convention:
-
-- **Legacy / base:** `<Character><N>` for free skins, sequential from `0`
-  (`ScavGirl0`–`4`, `Bagman0`–`3`, `MaskMan0`–`2`, `OldMan0`–`1`, `Shaman0`), plus
-  ad-hoc suffixed names for older unlockables (`ShamanDogHead`, `OldManBER`).
+- **Legacy / base:** `<Character><N>`, sequential from `0` (`ScavGirl0`–`4`, `Bagman0`–`3`,
+  `MaskMan0`–`2`, `OldMan0`–`1`, `Shaman0`), plus ad-hoc suffixed names for older unlockables.
 - **Current:** dotted, GameplayTag-shaped `Skin.<Character>.<Name>`.
 
-Note the character token differs between eras: `ScavGirl0` but `Skin.Girl.MAY`. A naive
-prefix match on `"ScavGirl"` would **miss** every dotted row, so per-character grouping
-cannot be pure prefix matching on a single token. See §6.
+Note `ScavGirl0` but `Skin.Girl.MAY` — a naive prefix match on `ScavGirl` misses every dotted
+row, so per-character grouping is not pure prefix matching on one token.
 
-## 4. Entitlement gating is external and tag-based **[VERIFIED]**
+## The roster — `FWSkinChangeComponent` on the pawn
 
-Two tables, neither of which is the skin registry:
-
-**`/Game/FW/Player/Data/DT_Entitlements`** — 15 rows, RowStruct `FWEntitlementTableRow`.
-Maps a store SKU or gift to a list of tags:
-
-```json
-"dlc:3651810": {
-  "DisplayName": { "SourceString": "Never Summer - Nosebleed Skin Pack" },
-  "EntitlementTags": [
-    "Entitlement.Skin.Bagman.LoadBreaker",
-    "Entitlement.Skin.Girl.BlindFang",
-    "Entitlement.Skin.Shaman.EtherealPup"
-  ]
-}
-```
-
-**`/Game/FW/Player/Data/DT_EntitlementTags`** — 19 rows, RowStruct `GameplayTagTableRow`,
-the tag definitions:
-
-```json
-"Skin.Girl.MAY":       { "Tag": "Entitlement.Skin.Girl.MAY" }
-"SkinGirlBlindFang":   { "Tag": "Entitlement.Skin.Girl.BlindFang", "DevComment": "Skin - Girl - Blind Fang" }
-```
-
-### The join **[INFERRED]**
-
-For current-era skins the `DT_EntitlementTags` **RowName** equals the `DT_SkinUIData`
-**RowName**, and the tag is that name prefixed with `Entitlement.`:
-
-| `DT_SkinUIData` row | `DT_EntitlementTags` row | Tag |
-|---|---|---|
-| `Skin.Girl.MAY` | `Skin.Girl.MAY` | `Entitlement.Skin.Girl.MAY` |
-| `Skin.Girl.DSQ` | `Skin.Girl.DSQ` | `Entitlement.Skin.Girl.DSQ` |
-| `Skin.Gunhead.May` | `Skin.Gunhead.MAY` | `Entitlement.Skin.Gunhead.MAY` |
-| `Skin.Maskman.April2026.LHD` | `Skin.Maskman.April2026.LHD` | … |
-
-Case differs (`May` vs `MAY`) but `FName` comparison in UE is case-insensitive, so these
-are the same key. 6 of the 7 dotted rows correspond exactly. The one exception:
-`DT_SkinUIData` has `Skin.Shaman.DSQ` while `DT_EntitlementTags` has `Skin.Shaman.Apr2026`
-— either a rename mid-development or a genuine mismatch.
-
-### ~~The consequence that matters~~ — RETRACTED 2026-07-20
-
-**Every `<Character><N>` base row has no entitlement counterpart at all.** `ScavGirl0`–`4`,
-`Bagman0`–`3`, `MaskMan0`–`2`, `OldMan0`–`1`, `Shaman0` appear in `DT_SkinUIData` and
-nowhere in either entitlement table. **[VERIFIED — this part still holds.]**
-
-What was wrong was the conclusion drawn from it. This doc previously claimed:
-
-> ~~a row with no matching entitlement tag is ungated … free and unlocked, with no
-> ownership check to defeat~~
-
-**That is backwards, and it is why the first PoC run showed nothing.**
-
-### What actually happens **[OBSERVED in-game, 2026-07-20]**
-
-The skin selector **only ever offers entitlement-gated DLC skins.** The shipped base skins
-are *not selectable there at all*. Concretely, as played:
-
-- The skin menu for a character lists **only the DLC skins**, not `ScavGirl0`–`4`.
-- Once a DLC skin is picked there is **no way back** to a base skin through the UI.
-- A base skin only reappears when you **die in a raid and respawn in the tunnels**, at
-  which point the game **randomly assigns** a skin — which may be a DLC skin or one of the
-  shipped base variants.
-
-So `DT_SkinUIData` feeds **two different consumers**:
-
-| Consumer | Rows it uses | Reachable how |
-|---|---|---|
-| Skin **selector** UI | entitlement-gated rows only | player picks |
-| Random respawn roll | base `<Char><N>` rows (and DLC) | assigned on tunnel respawn |
-
-Having no entitlement tag does not make a row free — it makes it **invisible to the
-selector**, leaving only the random pool. An appended row named in base convention lands in
-the pool nobody can choose from.
-
-This is corroborated by `WBP_SkinSelection`'s CDO property **`SelectLockedSkinsOnly: true`**
-(§6), which reads exactly as "keep only locked/entitled rows" — a filter that would reject
-an appended row regardless of what it is named.
-
-### What this costs the design
-
-Appending a row is necessary but **not sufficient**. To be *selectable*, a CMSF skin must
-additionally either (a) carry an entitlement the player actually owns, (b) run with the
-selector's filter disabled, or (c) be injected at the widget level. Only (a) is
-data-only — and it is the one that depends on platform ownership we cannot grant. See
-[01-design.md](01-design.md) §Post-PoC.
-
-## 5. `SK_SCV_FL_OCT` — a complete, shipped, unreachable skin **[VERIFIED]**
-
-A finished Scav Girl skin ships in the paks with **no `DT_SkinUIData` row pointing at it**:
-
-```
-ForeverWinter/Content/Character/Scavengers/Female/Skins/OCT/SK_SCV_FL_OCT.uasset
-ForeverWinter/Content/Character/Scavengers/Female/Skins/OCT/SK_SCV_FL_OCT_Skeleton.uasset
-ForeverWinter/Content/Character/Scavengers/Female/Skins/OCT/Materials/MI_SCV_FL_OCT.uasset
-ForeverWinter/Content/Character/Scavengers/Female/Skins/OCT/Textures/T_FL_SCV_OCT_{D,N,RMFT}.uasset
-```
-
-Mesh, its own skeleton, material instance, and all three texture maps — cooked and shipped.
-It is invisible purely because no row references it.
-
-This proves the negative direction of the thesis — **a mesh without a row is unreachable**
-— and hands us a free PoC subject. See [02-poc.md](02-poc.md).
-
-## 7. The real registry — `FWSkinChangeComponent` on the pawn Blueprint **[VERIFIED]**
-
-Every playable character's pawn Blueprint (`/Game/FW/Player/Class/BP_Player_<Char>`) carries
-an **`FWSkinChangeComponent`** whose component template holds the actual roster:
+Every playable character's pawn Blueprint (`/Game/FW/Player/Class/BP_Player_<Char>`) carries an
+`FWSkinChangeComponent` whose template holds the actual roster:
 
 | Property | Type | Role |
 |---|---|---|
 | `SkinChoices` | `TArray<FSoftObjectPath>` | free pool — the random respawn roll. **Not menu-selectable by default.** |
 | `LockedSkinChoices` | `TMap<FGameplayTag, FSoftObjectPath>` | entitlement-gated — **this is what the selector shows** |
-| `bReplicates` | bool | `true` |
 
-`BP_Player_Girl`'s, in full:
+`BP_Player_Girl`, in full:
 
 ```
-SkinChoices (5)
-  /Game/Character/Scavengers/Female/SK_SCV_FL      .SK_SCV_FL
-  /Game/Character/Scavengers/Female/SK_SCV_FL1     .SK_SCV_FL1
-  /Game/Character/Scavengers/Female/SK_SCV_FL2     .SK_SCV_FL2
-  /Game/Character/Scavengers/Female/SK_SCV_FL3     .SK_SCV_FL3
-  /Game/Character/Scavengers/Female/SK_SCV_FL4     .SK_SCV_FL4
-
-LockedSkinChoices (3)
-  Entitlement.Skin.Girl.BlindFang       -> Skins/SPT/SK_SCV_FL_SPT
-  Entitlement.Skin.Girl.Dec2025         -> Skins/DEC/SK_FL_SCV_DEC
-  Entitlement.Skin.Girl.April2026.DSQ   -> Skins/DSQ/SK_SCV_FL_DSQ
+SkinChoices (5)          SK_SCV_FL, SK_SCV_FL1 .. SK_SCV_FL4
+LockedSkinChoices (3)    Entitlement.Skin.Girl.BlindFang    -> Skins/SPT/SK_SCV_FL_SPT
+                         Entitlement.Skin.Girl.Dec2025      -> Skins/DEC/SK_FL_SCV_DEC
+                         Entitlement.Skin.Girl.April2026.DSQ-> Skins/DSQ/SK_SCV_FL_DSQ
 ```
 
-Across all six characters:
+Per-character counts: BagMan 4/1, Girl 5/3, Gunhead 1/3, MaskMan 3/3, OldMan 2/2, Shaman 1/3
+(`SkinChoices`/`LockedSkinChoices`).
 
-| Pawn | `SkinChoices` | `LockedSkinChoices` |
+Both are ordinary reflected UPROPERTYs on a `UActorComponent`, **not** a `UDataTable`'s raw
+`RowMap`. So they are reachable from UE4SS Lua by the same reflection other mods already use on
+this game — no native `AddDataTableRow` primitive is required, and no dependency on a native
+DataTable-writing binary.
+
+### What the selector actually shows
+
+`WBP_SkinSelection.SelectLockedSkinsOnly` selects which array feeds the selector. Measured live:
+
+| `SelectLockedSkinsOnly` | Selector shows | Composition |
 |---|---|---|
-| `BP_Player_BagMan` | 4 | 1 |
-| `BP_Player_Girl` | 5 | 3 |
-| `BP_Player_Gunhead` | 1 | 3 |
-| `BP_Player_MaskMan` | 3 | 3 |
-| `BP_Player_OldMan` | 2 | 2 |
-| `BP_Player_Shaman` | 1 | 3 |
+| `true` (default) | 2 entries | owned `LockedSkinChoices` only |
+| `false` (cleared) | 7 entries | 5 `SkinChoices` + 2 owned locked |
 
-### This explains every observation
+So the shipped **base skins are not selectable at all** by default: the menu offers only
+entitlement-gated DLC skins, and once a DLC skin is picked there is no UI route back. A base
+skin reappears only when you **die in a raid and respawn**, at which point the game randomly
+assigns one from `SkinChoices`. `DT_SkinUIData` therefore feeds two consumers:
 
-`WBP_SkinSelection.SelectLockedSkinsOnly` selects **which array feeds the selector**.
-Measured live on 2026-07-20:
-
-| `SelectLockedSkinsOnly` | `SkinOptions` children | Composition |
+| Consumer | Rows it uses | Reached how |
 |---|---|---|
-| `true` (default) | **2** | owned `LockedSkinChoices` only |
-| `false` (via probe) | **7** | 5 `SkinChoices` + 2 owned locked |
+| Skin **selector** UI | entitlement-gated only (until the filter is cleared) | player picks |
+| Random respawn roll | base `SkinChoices` (and DLC) | assigned on tunnel respawn |
 
-That accounts exactly for the reported behaviour: the menu offers only DLC skins; base
-skins are unreachable there and surface only through the random respawn roll, which draws
-from `SkinChoices`.
+Having no entitlement tag does not make a row free — it makes it **invisible to the selector**,
+leaving only the random pool. This is why appending a row is necessary but not sufficient, and
+why clearing `SelectLockedSkinsOnly` (what `CMSFUnlock` does) is what makes appended — and base
+— skins selectable at all.
 
-### Why this is good news
+### How the two halves join
 
-`SkinChoices` and `LockedSkinChoices` are **ordinary reflected UPROPERTYs on a
-UActorComponent**, not a `UDataTable`'s raw `RowMap`. So they are reachable from UE4SS Lua
-by the same reflection that `FWStealth` already uses on this game — **no native
-`AddDataTableRow` primitive is required**, and the TFWWorkbench dependency (with its `-894`
-ABI pin and unrebuildable `main.dll`) drops out of the design entirely.
+Repointing `SkinChoices[4]` from `SK_SCV_FL4` to the cut mesh `SK_SCV_FL_OCT`, and shipping two
+`DT_SkinUIData` rows both pointing at that mesh, with the filter cleared: **both** rows appeared
+as separate named entries, `ScavGirl4` disappeared (its mesh left the roster), total 8. From
+that:
 
-### How the two halves join — **[VERIFIED in-game 2026-07-20]**
+1. **A skin needs both halves** — mesh in the roster *and* a row pointing at it.
+2. **Row names are free.** A dotted `CMSF.Girl.TEST` rendered correctly, so a `CMSF.*` namespace
+   is safe from collision with official row names.
+3. **Many rows may share one mesh** — one shipped mesh can back several named menu identities.
 
-The roster test repointed `SkinChoices[4]` from `SK_SCV_FL4` to `SK_SCV_FL_OCT` and shipped
-two `DT_SkinUIData` rows (`ScavGirl5`, `CMSF.Girl.TEST`) both pointing at that same mesh.
-Result, with the filter cleared:
+`SkinName` / `SkinDetails` inline `FText` rendered verbatim, confirming a mod supplies its own
+strings with no string-table edit.
 
-- **Both** rows appeared, as separate entries, with their own names and descriptions
-  ("OCTOBER" / "OCTOBER (CMSF)").
-- **`ScavGirl4` disappeared** — its mesh is no longer in the roster.
-- Total **8** = 4 surviving base + 2 owned locked + 2 October.
+### The component's API
 
-So the selector **iterates `DT_SkinUIData` rows and shows a row when its `Skin` mesh path is
-present in the character's roster arrays** — not the other way round. Three consequences:
-
-1. **A skin needs both halves.** Mesh in `SkinChoices`/`LockedSkinChoices` (availability) *and*
-   a table row pointing at it (identity: name, description, icon). Neither alone shows up.
-2. **Row names are free.** `CMSF.Girl.TEST` rendered correctly, so CMSF can live in a
-   `CMSF.*` namespace with no risk of colliding with official row names. This settles the
-   naming question in [02-poc.md](02-poc.md) §Naming — **distance from official names is
-   achievable**, contrary to the sequential-enumeration worry.
-3. **Many rows may share one mesh.** Two rows on the same mesh produced two distinct,
-   independently-named entries. So one shipped mesh can back several menu identities.
-
-`SkinName` and `SkinDetails` inline `FText` both rendered verbatim, confirming §2 — a mod
-supplies its own display strings with no string-table edit.
-
-The mesh itself turns out to be an **unfinished** cut skin (visibly incomplete texturing),
-which is presumably why it shipped unwired. Irrelevant to the mechanism.
-
-### `FWSkinChangeComponent`'s API **[VERIFIED at runtime 2026-07-20]**
-
-Reflected off a live instance (`/Script/FWGameCore.FWSkinChangeComponent`, superclass
-`ActorComponent`):
+Reflected off a live `FWSkinChangeComponent` (superclass `ActorComponent`):
 
 ```
-fn   SetSelectedSkin        fn   GetUnlockedSkins      fn   OnRep_UpdateSkin
-fn   SetNewSkin             fn   GetAvailableSkins     fn   OnDeath
-fn   ForceUpdateSkin
-
-prop SkinChoices            ArrayProperty
-prop LockedSkinChoices      MapProperty
-prop SaveGame               ObjectProperty
-prop SelectedSkin           ObjectProperty
-prop OnChangedSkin          MulticastInlineDelegateProperty
+fn SetSelectedSkin   fn GetUnlockedSkins   fn OnRep_UpdateSkin
+fn SetNewSkin        fn GetAvailableSkins  fn OnDeath
+fn ForceUpdateSkin
+prop SkinChoices  prop LockedSkinChoices  prop SaveGame  prop SelectedSkin  prop OnChangedSkin
 ```
 
-This is the decisive result for the architecture. `GetAvailableSkins` is the natural feed
-for the selector, so **hooking it and returning an augmented list would require no pak
-override at all** — no `BP_Player_*` ownership, no composability limit, no per-patch rebase.
-`SetNewSkin` / `ForceUpdateSkin` give a direct apply path, and `OnDeath` is presumably the
-random reassignment on tunnel respawn.
+`GetAvailableSkins` is the natural feed for the selector, `SetNewSkin` / `ForceUpdateSkin` the
+apply path, `OnDeath` presumably the random reassignment on respawn (inference). `SaveGame` on
+the component is where skin persistence lives.
 
-`SaveGame` being an `ObjectProperty` on the component is where skin persistence lives —
-relevant to whether an appended skin survives a session.
+Two Lua caveats learned the hard way, both load-bearing for any runtime approach:
 
-### Lua access to the roster — why four write attempts failed
+- `SkinChoices` elements come back as opaque `TSoftObjectPtrUserdata`; guessed accessors
+  (`.AssetPathName`, `:GetFullName()`, `:get()`) return the element itself or error. Enumerate
+  the metatable rather than guessing.
+- Handing a loaded asset to `SetNewSkin` crashed the client with an access violation, and
+  `pcall` does **not** catch a C++ access violation. Plain bool writes and no-argument UFunction
+  calls are the only operations proven safe on this component.
 
-`SkinChoices` elements are **`TSoftObjectPtrUserdata`**, UE4SS's wrapper type. Its `__index`
-falls through such that `elem.AssetPath`, `elem.AssetPathName` and `elem.SubPathString` all
-return **the element itself**, and `:GetFullName()` / `:get()` / `:ForEachProperty()` all
-error with *"attempt to call a TSoftObjectPtrUserdata value"*.
+## Entitlement gating is external and tag-based
 
-So the earlier writes did not fail because the approach was wrong — they failed because the
-accessors were guessed. The metatable is enumerable from Lua (`getmetatable`), which is the
-correct way to discover the real method set rather than guessing a fifth time.
+Two DataTables, neither of them the skin registry:
 
-### Loose end
+- **`DT_Entitlements`** (15 rows) maps a store SKU or gift to a list of tags, e.g. `dlc:3651810`
+  → `Entitlement.Skin.Bagman.LoadBreaker`, `Entitlement.Skin.Girl.BlindFang`, ...
+- **`DT_EntitlementTags`** (19 rows) defines the tags.
 
-`DT_SkinUIData` contains `Skin.Girl.MAY` (mesh `Skins/MAY/SK_SCV_FL_May`), but
-`LockedSkinChoices` has **no** May entry — only 3 of the table's 4 girl DLC skins. Either
-May is wired up by some other path, or it shipped in the table ahead of the component.
-Worth understanding before assuming `LockedSkinChoices` is the complete gate.
+For current-era skins the `DT_EntitlementTags` row name equals the `DT_SkinUIData` row name, and
+the tag is that name prefixed with `Entitlement.` (`FName` comparison is case-insensitive, so
+`May`/`MAY` are the same key). Every `<Character><N>` base row has no entitlement counterpart at
+all — consistent with base skins being reachable only through the respawn roll, not the
+selector.
 
-## 6. What is still unknown
+Whether the player *owns* a tag is presumably resolved against Steam/EOS, which a data table
+cannot fake. But some entitlements are granted by in-game achievement rather than purchase (the
+`GIFT.*` rows), which hints a **local** grant path exists — the one route by which a data-only
+mod could make a slot selectable without clearing the selector filter. Chasing it is the only
+open question that could remove the runtime dependency entirely; it is not needed for the
+shipping design.
 
-The per-character grouping and enumeration logic is **not** in any data asset. It lives in
-Blueprint bytecode (`WBP_SkinSelection` / `WBP_CharacterSelection`) or in native
-`/Script/FWGameCore`, and CUE4Parse does not decompile bytecode to readable form.
+## What is not in any data asset
 
-`WBP_SkinSelection` structure that *is* readable:
+The per-character grouping and enumeration logic lives in Blueprint bytecode
+(`WBP_SkinSelection` / `WBP_CharacterSelection`) or native `/Script/FWGameCore`, which CUE4Parse
+does not decompile. The readable structure of `WBP_SkinSelection`: functions `Init`, `Construct`,
+`SkinSelected`, `HoverSkin`; widgets `SkinOptions` (a `WrapBox` populated at runtime), `SkinIcon`,
+`SkinNameText`, `SkinDescription`, `UseSkinButton`; and the CDO property `SelectLockedSkinsOnly:
+true`. The applier is `/Game/FW/Player/GameplayAbilities/GA_Player_ChangeSkin`.
 
-- Functions: `Init`, `Construct`, `SkinSelected`, `HoverSkin`, `UnhoverSkin`, `CanScroll`,
-  `TriggerInput`, `NewFunction`
-- Delegates: `UpdateSkin`, `CancelSelection`
-- Widgets: `SkinOptions` (`WrapBox`, populated at runtime), `SB_SkinOptions` (`FWScrollBox`),
-  `SkinIcon`, `SkinNameText`, `SkinDescription`, `UseSkinButton`
-- CDO property: **`SelectLockedSkinsOnly: true`** — locked/unlocked filtering exists and is
-  a live concern
+One loose end worth resolving before assuming `LockedSkinChoices` is the complete gate:
+`DT_SkinUIData` contains `Skin.Girl.MAY`, but `LockedSkinChoices` has no May entry — only 3 of
+Girl's 4 DLC skins. Either May is wired up by another path, or it shipped in the table ahead of
+the component.
 
-The applier is `/Game/FW/Player/GameplayAbilities/GA_Player_ChangeSkin`.
+## A free test subject — `SK_SCV_FL_OCT`
 
-Open questions, in priority order:
-
-1. **Does the UI enumerate all rows, or a fixed list?** If it iterates `<Char><N>` until a
-   miss, a new row must be sequentially numbered. If it scans every row and groups them,
-   naming is freer. If the roster is a hardcoded array in bytecode, data-level injection
-   fails outright and we fall back to widget-level injection.
-2. **How does a dotted row get attributed to a character?** Related to (1).
-3. **What does `SelectLockedSkinsOnly` gate?** Could an unrecognised row render as locked?
-4. **Does `GA_Player_ChangeSkin` re-validate** the skin against an ownership list before
-   applying the mesh?
-
-Question 1 is answerable with a single cheap experiment, and its answer constrains 2 and 3.
-That experiment is the next thing to build.
+A complete, cooked Scav Girl skin ships in the paks — mesh, its own skeleton, material instance,
+all three texture maps — with **no `DT_SkinUIData` row pointing at it**, so it is invisible for
+exactly one reason. That makes it a clean single-variable subject for the experiment that first
+established the roster mechanism, without cooking any new art. See
+[02-poc.md](02-poc.md). (The mesh itself is a visibly unfinished cut skin, which is presumably
+why it shipped unwired — irrelevant to the mechanism.)

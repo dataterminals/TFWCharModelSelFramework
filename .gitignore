@@ -6,6 +6,12 @@ extracted/
 *.ubulk
 *.usmap
 
+# The game's pak AES key is the game's own decryption key — supply it locally, never commit it.
+fw_aes.txt
+aes.txt
+aes.key
+retoc/
+
 # Built mod artifacts (attach to releases instead)
 dist/**/*.pak
 dist/**/*.utoc

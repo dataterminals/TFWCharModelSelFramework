@@ -34,8 +34,10 @@ import subprocess
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import fwlocate  # noqa: E402  (local module, beside this script)
+
 ROOT = Path(__file__).resolve().parent.parent
-AES = "0x84B2244BE0AF90C22976D739FA0665569219F4CEA119CEA37C81F2D9ABEE4795"
 
 # The only six playable characters. BP_Player_MaskMan is the one usually mis-remembered as
 # "Mech Trooper".
@@ -50,28 +52,8 @@ ST_TPL   = "ForeverWinter/Content/FW/UI/StringTables/ST_FW_UI_Skins.uasset"
 SPEC_BATCH = 100
 
 
-def find(env, candidates, what):
-    v = os.environ.get(env)
-    if v and Path(v).exists():
-        return v
-    for c in candidates:
-        if Path(c).exists():
-            return c
-    sys.exit(f"could not locate {what}; set ${env}")
-
-
-RETOC = find("RETOC", [
-    r"H:\Github Repositories\AllWeaponsUnlockableFix\tools\retoc\retoc.exe",
-    r"D:\Github Repositories\HeavyRifleRebalanceFix\tools\retoc\retoc.exe",
-], "retoc.exe")
-USMAP = find("USMAP", [
-    r"H:\Github Repositories\forever-winter-datamine\datamine\mappings\ForeverWinter-5.4.2.usmap",
-    r"D:\Github Repositories\forever-winter-datamine\datamine\mappings\ForeverWinter-5.4.2.usmap",
-], "the usmap")
-PAKS = find("FW_PAKS", [
-    r"H:\SteamLibrary\steamapps\common\The Forever Winter\Windows\ForeverWinter\Content\Paks",
-    r"D:\SteamLibrary\steamapps\common\The Forever Winter\Windows\ForeverWinter\Content\Paks",
-], "the game's Paks directory")
+# Resolved at the top of main() via the shared locator.
+RETOC = USMAP = PAKS = None
 
 
 def run(cmd, quiet=False):
@@ -115,6 +97,9 @@ def main():
     if not 1 <= args.slots <= 100:
         sys.exit("--slots must be 1..100 — slot numbers are two digits by ABI")
 
+    global RETOC, USMAP, PAKS
+    RETOC, USMAP, PAKS = fwlocate.retoc(), fwlocate.usmap(), fwlocate.paks()
+
     tag = "Stress" if args.stress else "Core"
     pak = f"CMSF_{tag}_9_P"
     build = ROOT / "build" / "framework"
@@ -139,7 +124,7 @@ def main():
 
     print("==> extracting from the live cook")
     for f in ["DT_SkinUIData", "ST_FW_UI_Skins"] + [f"BP_Player_{c}" for c in chars]:
-        run([RETOC, "-a", AES, "to-legacy", "--version", "UE5_4", "-f", f, PAKS, src],
+        run([RETOC, "-a", fwlocate.aes(), "to-legacy", "--version", "UE5_4", "-f", f, PAKS, src],
             quiet=True)
     need = [TBL_REL, ST_TPL] + [f"{BP_DIR}/BP_Player_{c}.uasset" for c in chars]
     for rel in need:
@@ -201,7 +186,7 @@ def main():
         shutil.copy(f, vsrc / f.name)
     # -f is mandatory against a full mount, or this extracts the entire cook.
     for filt in ["DT_SkinUIData", "ST_CMSF_"] + [f"BP_Player_{c}" for c in chars]:
-        run([RETOC, "-a", AES, "to-legacy", "--version", "UE5_4", "-f", filt, vsrc, vout],
+        run([RETOC, "-a", fwlocate.aes(), "to-legacy", "--version", "UE5_4", "-f", filt, vsrc, vout],
             quiet=True)
 
     problems = []

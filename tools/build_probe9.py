@@ -43,31 +43,13 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-AES = "0x84B2244BE0AF90C22976D739FA0665569219F4CEA119CEA37C81F2D9ABEE4795"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import fwlocate  # noqa: E402  (local module, beside this script)
 
-
-def find(env, candidates, what):
-    v = os.environ.get(env)
-    if v and Path(v).exists():
-        return v
-    for c in candidates:
-        if Path(c).exists():
-            return c
-    sys.exit(f"could not locate {what}; set ${env}")
-
-
-RETOC = find("RETOC", [
-    r"H:\Github Repositories\AllWeaponsUnlockableFix\tools\retoc\retoc.exe",
-    r"D:\Github Repositories\HeavyRifleRebalanceFix\tools\retoc\retoc.exe",
-], "retoc.exe")
-USMAP = find("USMAP", [
-    r"H:\Github Repositories\forever-winter-datamine\datamine\mappings\ForeverWinter-5.4.2.usmap",
-    r"D:\Github Repositories\forever-winter-datamine\datamine\mappings\ForeverWinter-5.4.2.usmap",
-], "the usmap")
-PAKS = find("FW_PAKS", [
-    r"H:\SteamLibrary\steamapps\common\The Forever Winter\Windows\ForeverWinter\Content\Paks",
-    r"D:\SteamLibrary\steamapps\common\The Forever Winter\Windows\ForeverWinter\Content\Paks",
-], "the game's Paks directory")
+AES = fwlocate.aes()
+RETOC = fwlocate.retoc()
+USMAP = fwlocate.usmap()
+PAKS = fwlocate.paks()
 
 BP_REL  = "ForeverWinter/Content/FW/Player/Class/BP_Player_Girl.uasset"
 TBL_REL = "ForeverWinter/Content/FW/Player/Data/DT_SkinUIData.uasset"

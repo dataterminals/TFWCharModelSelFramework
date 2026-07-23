@@ -3,13 +3,11 @@
 A framework for **appending** player-character skins to *The Forever Winter*'s
 character-select screen, instead of overwriting the finite set of slots the game ships with.
 
-**Status: v0.2 is built, validated in-game, and packaged. Not yet released.**
+**Status: v0.2 — public. Built, validated in-game, and packaged.**
 
-Probes 1–9 all pass, and on 2026-07-22 **all six characters** were opened in-game against the
-real 192-slot framework: every menu populates and prunes, and an author's claim renders with
-its own name, portrait and mesh. See [docs/05-v2-distribution.md](docs/05-v2-distribution.md)
-for the design and probe results, [docs/06-next-session.md](docs/06-next-session.md) for the
-current handoff.
+v0.2 was validated across **all six characters** against the real 192-slot framework: every menu
+populates and prunes, and an author's claim renders with its own name, portrait and mesh. See
+[docs/05-v2-distribution.md](docs/05-v2-distribution.md) for the distribution design.
 
 ```bash
 python tools/cmsf_framework.py --slots 32       # the framework users install once
@@ -17,15 +15,10 @@ cmsf-author.exe <skin-dir>                      # one skin -> one pak trio (auth
 pwsh tools/package-release.ps1                  # the author bundle, guarded
 ```
 
-**What remains before release:**
-
-1. **Make this repo public.** `cmsf-author` fetches the slot registry from the repo's raw URL,
-   so while it is private the collision check degrades to "cannot check" for every author. It
-   fails soft by design, but it is inert until the flip.
-2. Ship it — the Nexus page and release notes are drafted in
-   [docs/08-public-copy.md](docs/08-public-copy.md).
-
-Untested and documented as such: **multiplayer**, and behaviour **across a game patch**.
+**Not yet tested, and documented as such:** behaviour in **multiplayer** co-op, and **across a
+game patch**. The structural analysis of the former is in
+[docs/03-multiplayer.md](docs/03-multiplayer.md); it predicts skins need the pak on every peer,
+but no live two-client test has confirmed it.
 
 ## The two distribution models
 
@@ -95,16 +88,15 @@ string at load time. So a new row can point at assets that were never part of th
 
 ```
 docs/
-  00-findings.md         what the datamine proves — the registry, the row struct, entitlements
-  01-design.md           injection vectors, the composability constraint, open questions
-  02-poc.md              the experiments that located the real roster
+  00-findings.md         how the game drives skin selection — the table, the roster, entitlements
+  01-design.md           why CMSF is shaped as it is — the composability constraint, the vectors
+  02-poc.md              how the roster mechanism was established
   03-multiplayer.md      what happens to mods in co-op — host authority, skins as soft paths
   04-authoring.md        v0.1 authoring. SUPERSEDED for v0.2 — see 07
-  05-v2-distribution.md  v0.2 design + probe results. Contains a long argument for a
-                         placeholder mechanism that probe 6 DISPROVED; marked, but do not skim
-  06-next-session.md     handoff: what is proven, what remains, gotchas, machine setup
+  05-v2-distribution.md  the v0.2 distribution design — reserved slots, the claim signal, the ABI
+  06-implementation-notes.md  gotchas from building the tools and runtime, and a possible v0.3 extension
   07-authoring-v2.md     v0.2 authoring (mod-author facing) — the current guide
-  08-public-copy.md      Nexus page, release notes, and what NOT to claim. Draft
+  08-public-copy.md      Nexus page and announcement copy
   slots.md               the slot registry — who claimed which <Char>/<NN>
 ```
 ```
@@ -132,10 +124,11 @@ runtime/
 > package name collides by `FPackageId` and the loader serves it in the template's place.
 > See [docs/05-v2-distribution.md](docs/05-v2-distribution.md) §"The identity rule".
 
-> **What must never be redistributed.** `ForeverWinter-*.usmap` (decoded from the game's own
-> type layout) and `oo2core_9_win64.dll` (proprietary Oodle — retoc provisions it itself, and
-> it *will* appear in your build folder). `package-release.ps1` enforces this rather than
-> trusting anyone to remember it.
+> **What must never be redistributed.** The game's pak **AES key** — its own decryption key,
+> supplied via `FW_AES_KEY` or an `fw_aes.txt` and never bundled — `ForeverWinter-*.usmap`
+> (decoded from the game's own type layout), and `oo2core_9_win64.dll` (proprietary Oodle — retoc
+> provisions it itself, and it *will* appear in your build folder). `package-release.ps1` enforces
+> the file cases rather than trusting anyone to remember them.
 
 ## Prior art in this workspace
 

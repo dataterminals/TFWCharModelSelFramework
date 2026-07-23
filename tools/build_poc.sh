@@ -13,10 +13,14 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-RETOC="${RETOC:-H:/Github Repositories/UnkillablesRebalanceFix/tools/retoc/retoc.exe}"
-USMAP="${USMAP:-H:/Github Repositories/forever-winter-datamine/datamine/mappings/ForeverWinter-5.4.2.usmap}"
-PAKS="${FW_PAKS:-H:/SteamLibrary/steamapps/common/The Forever Winter/Windows/ForeverWinter/Content/Paks}"
-AES="0x84B2244BE0AF90C22976D739FA0665569219F4CEA119CEA37C81F2D9ABEE4795"
+# Everything game-derived comes from the environment; nothing personal or game-owned is baked
+# in. Set RETOC and USMAP to your own copies, FW_PAKS to the game's Content/Paks, and
+# FW_AES_KEY to the game's pak AES key — CMSF never ships that key, exactly as it never ships a
+# usmap. The Python tools do the same discovery automatically via tools/fwlocate.py.
+RETOC="${RETOC:?set RETOC to retoc.exe}"
+USMAP="${USMAP:?set USMAP to your ForeverWinter-*.usmap}"
+PAKS="${FW_PAKS:?set FW_PAKS to ...\\The Forever Winter\\Windows\\ForeverWinter\\Content\\Paks}"
+AES="${FW_AES_KEY:?set FW_AES_KEY to the game pak AES key (CMSF does not ship it)}"
 
 SKINPATCH="tools/skinpatch/bin/Release/net8.0/skinpatch.exe"
 REL="ForeverWinter/Content/FW/Player/Data/DT_SkinUIData.uasset"

@@ -50,21 +50,24 @@ nothing else: no manifest, no config, no exe.
 
 ### 0. One-time setup
 
-Put `cmsf-author.exe` and `retoc.exe` in a folder. Then dump a `.usmap` from your own copy of
-the game and drop it beside them:
+Put `cmsf-author.exe` and `retoc.exe` in a folder. Two things come from **your own copy of the
+game**, because CMSF cannot ship either without redistributing part of the game:
 
-- **Ctrl+Numpad6** in-game, or a **`DumpUSMAP()`** call from Lua.
+- **A `.usmap`.** Dump one with UE4SS — **Ctrl+Numpad6** in-game, or a **`DumpUSMAP()`** call
+  from Lua — and drop it beside the exe. It is decoded from the game's own type layout. Dump a
+  fresh one after any game update.
+- **The pak AES key.** Put it in an `fw_aes.txt` beside the exe (or set `FW_AES_KEY`, or pass
+  `--aes`). It is the game's own decryption key; UE4SS can dump it, and it is listed in the usual
+  community key databases for each build.
 
-You already run UE4SS for `CMSFUnlock`, so this is not a new dependency. CMSF cannot ship a
-usmap for you — it is decoded from the game's own type layout, so distributing it would
-redistribute part of the game. Dump a fresh one after any game update.
+You already run UE4SS for `CMSFUnlock`, so neither is a new dependency.
 
 > If `Ctrl+Numpad6` does nothing, UE4SS's built-in **Keybinds** mod is disabled. Set
 > `Keybinds : 1` in `Binaries\Win64\ue4ss\Mods\mods.txt`, editing the line where it already
 > sits — it is last in the file on purpose. `DumpUSMAP()` does not depend on the bind.
 
-Everything else is found for you: the game via Steam, retoc beside the exe. Each has an
-override (`--game`, `--retoc`, `--usmap`).
+Everything else is found for you: the game via Steam, retoc beside the exe. Each input has an
+override (`--game`, `--retoc`, `--usmap`, `--aes`).
 
 ### 1. Claim a slot
 

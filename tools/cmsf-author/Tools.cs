@@ -1,10 +1,9 @@
-// Finding the three things this tool cannot ship, and driving the one it can.
+// Finding the things this tool must not ship, and driving the one it can.
 //
-// tools/cmsf_author.py hardcodes absolute paths for two development machines. That is fine
-// for a script run from a clone and useless in an author's hands, so everything here is
-// discovery plus an explicit override.
-//
-// WHAT MUST NOT BE REDISTRIBUTED (docs/04-authoring.md §"What ships, and what must not"):
+// Everything game-derived is discovered or supplied by the author, never bundled — the rule
+// the whole project follows (docs/04-authoring.md §"What ships, and what must not"):
+//   * the pak AES key        — the game's own decryption key. Supply it with FW_AES_KEY,
+//     --aes, or an fw_aes.txt beside the exe. UE4SS can dump it; CMSF never ships it.
 //   * ForeverWinter-*.usmap  — decoded from the game's own type layout. Shipping it
 //     redistributes part of the game. Authors dump their own with UE4SS, once per version.
 //   * oo2core_9_win64.dll    — proprietary Oodle. retoc provisions this itself, which is why
@@ -14,8 +13,44 @@ using System.Diagnostics;
 
 static class Tools
 {
-    public const string Aes =
-        "0x84B2244BE0AF90C22976D739FA0665569219F4CEA119CEA37C81F2D9ABEE4795";
+    /// <summary>The game's pak AES key. Resolved by FindAes and set once at the start of a build.</summary>
+    public static string Aes;
+
+    /// <summary>
+    /// Resolve the game's pak AES key without CMSF ever shipping it — it is the game's own
+    /// decryption key, no more redistributable than the usmap. Order: --aes, then FW_AES_KEY,
+    /// then an fw_aes.txt / aes.txt an author drops beside the exe (the same bring-it-once
+    /// model as the usmap). Not needed for --list-free, so it is resolved only inside a build.
+    /// </summary>
+    public static string FindAes(string overrideKey)
+    {
+        var key = overrideKey;
+        if (string.IsNullOrWhiteSpace(key))
+            key = Environment.GetEnvironmentVariable("FW_AES_KEY");
+        if (string.IsNullOrWhiteSpace(key) && Directory.Exists(ExeDir))
+            foreach (var name in new[] { "fw_aes.txt", "aes.txt", "aes.key" })
+            {
+                var f = Path.Combine(ExeDir, name);
+                if (File.Exists(f)) { key = File.ReadAllText(f).Trim(); if (!string.IsNullOrWhiteSpace(key)) break; }
+            }
+
+        key = key?.Trim();
+        if (string.IsNullOrWhiteSpace(key))
+            throw new BuildError(
+                "No game AES key, and CMSF does not ship it — it is the game's own pak decryption\n" +
+                "  key, the same reason CMSF does not ship a usmap. Supply it once, any one of:\n" +
+                "    * put it in fw_aes.txt next to cmsf-author.exe, or\n" +
+                "    * set the FW_AES_KEY environment variable, or\n" +
+                "    * pass --aes <key>.\n" +
+                "  UE4SS can dump it, or take it from the usual community key database for your build.\n" +
+                "  It is 0x followed by 64 hex digits.");
+
+        if (!key.StartsWith("0x", StringComparison.OrdinalIgnoreCase)) key = "0x" + key;
+        var hex = key[2..];
+        if (hex.Length != 64 || !hex.All(Uri.IsHexDigit))
+            throw new BuildError($"the AES key looks wrong: expected 0x + 64 hex digits, got '{key}'");
+        return key;
+    }
 
     /// <summary>
     /// The directory holding the running exe. NOT AppContext.BaseDirectory — under

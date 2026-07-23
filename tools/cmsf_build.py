@@ -35,6 +35,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import fwlocate  # noqa: E402  (local module, beside this script)
+
 ROOT = Path(__file__).resolve().parent.parent
 
 # Pawn Blueprint per character key. These are the only six playable characters;
@@ -51,13 +54,9 @@ CHARACTERS = {
 BP_DIR = "ForeverWinter/Content/FW/Player/Class"
 TABLE_REL = "ForeverWinter/Content/FW/Player/Data/DT_SkinUIData.uasset"
 
-AES = "0x84B2244BE0AF90C22976D739FA0665569219F4CEA119CEA37C81F2D9ABEE4795"
-# Dev-machine conveniences only — override with --retoc/--usmap/--paks or the
-# RETOC/USMAP/FW_PAKS env vars. (These were H: until the repos moved to D:; a wrong default
-# fails loudly at the exists-check below, not silently.)
-DEFAULT_RETOC = r"D:\Github Repositories\HeavyRifleRebalanceFix\tools\retoc\retoc.exe"
-DEFAULT_USMAP = r"D:\Github Repositories\forever-winter-datamine\datamine\mappings\ForeverWinter-5.4.2.usmap"
-DEFAULT_PAKS = r"D:\SteamLibrary\steamapps\common\The Forever Winter\Windows\ForeverWinter\Content\Paks"
+# retoc/usmap/paks resolve from the --flags, then env vars, then fwlocate discovery (Steam
+# for the paks, tools/retoc and PATH for retoc, USMAP for the mappings). The game's AES key
+# comes from FW_AES_KEY and is never bundled — see tools/fwlocate.py.
 
 # Load order: the token between the LAST TWO underscores of a _P.pak is parsed as the chunk
 # version (N -> N+1, PakOrder += 100*CVN). A numeric PREFIX is inert. Under MO2 the plugin
@@ -114,9 +113,9 @@ def load_skins():
 
 def main():
     ap = argparse.ArgumentParser(description="Build the CMSF pak from registered skins.")
-    ap.add_argument("--paks", default=os.environ.get("FW_PAKS", DEFAULT_PAKS))
-    ap.add_argument("--retoc", default=os.environ.get("RETOC", DEFAULT_RETOC))
-    ap.add_argument("--usmap", default=os.environ.get("USMAP", DEFAULT_USMAP))
+    ap.add_argument("--paks", default=os.environ.get("FW_PAKS"))
+    ap.add_argument("--retoc", default=os.environ.get("RETOC"))
+    ap.add_argument("--usmap", default=os.environ.get("USMAP"))
     ap.add_argument("--out", default=str(ROOT / "dist" / "CMSF"))
     ap.add_argument("--list", action="store_true", help="show registered skins and exit")
     ap.add_argument("--pool", type=int, default=0, metavar="N",
@@ -175,6 +174,10 @@ def main():
                 print(f"  {'':36} {s['mesh']}")
         return 0
 
+    # Everything below needs the toolchain; --list and the no-skins case have already returned.
+    args.paks = args.paks or fwlocate.paks()
+    args.retoc = args.retoc or fwlocate.retoc()
+    args.usmap = args.usmap or fwlocate.usmap()
     for p in (args.retoc, args.usmap):
         if not Path(p).is_file():
             sys.exit(f"missing: {p}")
@@ -198,7 +201,7 @@ def main():
     needed = sorted(CHARACTERS[c] for c in skins)
     print(f"==> extracting {len(needed)} pawn Blueprint(s) + DT_SkinUIData from the live cook")
     for f in needed + ["DT_SkinUIData"]:
-        run([args.retoc, "-a", AES, "to-legacy", "--version", "UE5_4", "-f", f,
+        run([args.retoc, "-a", fwlocate.aes(), "to-legacy", "--version", "UE5_4", "-f", f,
              args.paks, str(src)])
 
     # --- patch the roster, one Blueprint per affected character -------------------------
