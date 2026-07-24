@@ -18,7 +18,17 @@
 -- lost when this was packaged from the probe, and the polled path was never verified
 -- in-game before release.
 --
--- RULE: every line that touches a UObject runs inside ExecuteInGameThread. No exceptions.
+-- RULE: every line that reads, writes, or CALLS a UObject runs inside ExecuteInGameThread.
+-- The single thing allowed off the game thread is a read-only FindAllOf presence check that
+-- gates whether to hop on at all (see anySelectorResident below). It constructs nothing,
+-- reads no property and calls no method, so the v0.1.1 failure — off-thread writes silently
+-- not taking — cannot apply to it. Every actual read/write/call still runs on the game thread.
+--
+-- WHY THE GATE EXISTS. FindAllOf is a full walk of the object array. Running the whole poll
+-- body inside ExecuteInGameThread paid for that walk ON THE GAME THREAD every second forever,
+-- which is a frame hitch at the poll cadence whether or not a skin menu is anywhere near — the
+-- selector only exists in the ready room, not in a raid. The gate keeps the game thread idle
+-- until there is genuinely a selector to act on.
 --
 -- SAFETY RULES (each learned by breaking something)
 --   * Never invoke a native UFunction taking an object or struct parameter. `pcall` does
@@ -159,6 +169,28 @@ local function prune(w)
     return n, restored
 end
 
+-- Auto-report the populated list size when it changes. SkinOptions has no children until the
+-- skin panel is actually opened, and the panel draws OVER the UE4SS console — so asking for a
+-- manual command at the right moment does not work in practice; reporting on change means
+-- opening the menu is the whole interaction and the log records the number by itself.
+--
+-- Takes a selector the caller ALREADY has in hand. This used to re-run FindAllOf (a second
+-- full object-array scan every poll); folded into apply()'s existing walk so the poll scans
+-- once, not twice. MUST be called on the game thread.
+local lastCount = -1
+local function reportCountForWidget(w)
+    local n = -1
+    pcall(function()
+        local kids = w.SkinOptions:GetAllChildren()
+        n = kids and #kids or -1
+    end)
+    -- Only populated selectors are interesting, and only when the number moves.
+    if n > 0 and n ~= lastCount then
+        lastCount = n
+        log(string.format("skin menu open: %d skin(s) listed", n))
+    end
+end
+
 -- Returns applied, seen, hidden, restored. MUST be called on the game thread.
 local function apply(verbose)
     local found = FindAllOf(WIDGET)
@@ -205,6 +237,10 @@ local function apply(verbose)
                     log(string.format("selector lists %d skin(s)%s", n,
                         n > 0 and "" or "  (open the skin menu, then re-run)"))
                 end
+            else
+                -- Poll path: report the count on change, reusing this same widget rather
+                -- than a fresh FindAllOf. (The old standalone reportCount() is gone.)
+                reportCountForWidget(w)
             end
         end
     end
@@ -214,32 +250,23 @@ local function apply(verbose)
     return applied, seen, pruned, restored
 end
 
--- Auto-report the populated list size. SkinOptions has no children until the skin panel is
--- actually opened, and the panel draws OVER the UE4SS console — so asking for a manual
--- command at exactly the right moment does not work in practice. Reporting on change means
--- opening the menu is the whole interaction; the log records the number by itself.
-local lastCount = -1
-local function reportCount()
+-- The off-thread presence gate. FindAllOf here is the ONE UObject read allowed off the game
+-- thread (see the RULE at the top): it reads no property and calls no method, so it cannot hit
+-- the v0.1.1 off-thread-write failure — it only asks the object array whether a selector even
+-- exists yet. When it does not (a raid, a load screen, anywhere but the ready room) the poll
+-- returns without ever touching the game thread, which is the whole fix for the 1 Hz hitch.
+-- Every read/write/call that follows still happens on the game thread inside apply().
+local function anySelectorResident()
     local found = FindAllOf(WIDGET)
-    if not found then return end
-    for _, w in pairs(found) do
-        if w:IsValid() then
-            local n = -1
-            pcall(function()
-                local kids = w.SkinOptions:GetAllChildren()
-                n = kids and #kids or -1
-            end)
-            -- Only populated selectors are interesting, and only when the number moves.
-            if n > 0 and n ~= lastCount then
-                lastCount = n
-                log(string.format("skin menu open: %d skin(s) listed", n))
-            end
-        end
-    end
+    return found ~= nil and next(found) ~= nil
 end
 
 LoopAsync(POLL_MS, function()
-    if enabled then
+    -- Cheap off-thread check first; only hop onto the game thread when there is a selector to
+    -- act on. apply() re-runs FindAllOf on the game thread (its handles must be game-thread
+    -- ones) and folds the count report in — so a resident menu costs one on-thread scan, and
+    -- an absent one costs zero.
+    if enabled and anySelectorResident() then
         -- The wrapper that v0.1 was missing.
         ExecuteInGameThread(function()
             local applied, _, pruned, restored = apply(false)
@@ -257,7 +284,6 @@ LoopAsync(POLL_MS, function()
             if restored > 0 then
                 log(string.format("restored %d claimed CMSF tile(s)", restored))
             end
-            reportCount()
         end)
     end
     return false      -- never stop
