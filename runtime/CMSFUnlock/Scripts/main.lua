@@ -30,6 +30,28 @@
 -- selector only exists in the ready room, not in a raid. The gate keeps the game thread idle
 -- until there is genuinely a selector to act on.
 --
+-- v0.2.1 — THE GATE WAS NOT ENOUGH. Player report against v0.2.0: the hitch was clearly
+-- better, and clearly still there — in raids as well as the ready room. So "on the game
+-- thread" was never the whole cost. FindAllOf walks the ENTIRE object array, and doing that
+-- once a second forever evicts a lot of cache and contends with the game thread even from
+-- off it. The gate removed the on-thread walk where no selector exists. It did not remove
+-- the walk.
+--
+-- So the idle poll now BACKS OFF. The interval between scans doubles every time no selector
+-- is found, up to IDLE_MAX_TICKS, and snaps back to every tick the moment one appears. A raid
+-- settles at one walk per 8 s rather than 60 per minute. What that costs is up to 8 s before a
+-- freshly-entered ready room gets unfiltered — which self-corrects on the first scan that does
+-- land, long before anyone has navigated to the skin menu, and the manual `cmsfunlock` is
+-- still there if it ever does not.
+--
+-- STILL OUTSTANDING. A ready room with a selector resident still pays one on-thread walk per
+-- second, because apply() must re-run FindAllOf on the game thread (see the gate's note on
+-- handle safety). Removing that needs an event to replace the poll entirely — a map-load hook
+-- or NotifyOnNewObject — neither of which has been verified against this UE4SS build. Do not
+-- ship one on reasoning alone: that is precisely how v0.1 shipped a path that did nothing.
+-- `cmsfscan` in the CMSFTime dev mod measures what a single walk actually costs, so the next
+-- move can be sized off a number instead of an argument.
+--
 -- SAFETY RULES (each learned by breaking something)
 --   * Never invoke a native UFunction taking an object or struct parameter. `pcall` does
 --     NOT protect against a C++ access violation — it catches Lua errors only, and the
@@ -40,8 +62,14 @@
 --   * A plain bool write plus a NO-ARGUMENT UFunction call is safe: neither can
 --     type-confuse a native call. That is all this file does.
 
+-- Logged on load, because the only channel for a stutter report is someone reading it off
+-- their console — and "better but not gone" against v0.2.0 was nearly attributed to the wrong
+-- build. A tester should never have to guess which one they are running.
+local VERSION = "0.2.1"
+
 local WIDGET = "WBP_SkinSelection_C"
-local POLL_MS = 1000
+local POLL_MS = 1000         -- the tick; the object-array scan runs on a backoff MULTIPLE of it
+local IDLE_MAX_TICKS = 8     -- ceiling on that backoff, so an idle raid walks once per 8 s
 
 local enabled = true
 local quiet = false          -- set once the first successful apply has been reported
@@ -254,19 +282,45 @@ end
 -- thread (see the RULE at the top): it reads no property and calls no method, so it cannot hit
 -- the v0.1.1 off-thread-write failure — it only asks the object array whether a selector even
 -- exists yet. When it does not (a raid, a load screen, anywhere but the ready room) the poll
--- returns without ever touching the game thread, which is the whole fix for the 1 Hz hitch.
--- Every read/write/call that follows still happens on the game thread inside apply().
+-- returns without ever touching the game thread. Every read/write/call that follows still
+-- happens on the game thread inside apply().
+--
+-- This is a real saving and it is NOT the whole fix — v0.2.0 shipped believing it was, and the
+-- hitch survived. The walk itself costs, wherever it runs, so the caller also has to do it less
+-- often; see the backoff below.
 local function anySelectorResident()
     local found = FindAllOf(WIDGET)
     return found ~= nil and next(found) ~= nil
 end
 
+-- Backoff state. `scanEvery` is in ticks, not milliseconds, because LoopAsync's interval is
+-- fixed at registration — so the tick stays at 1 Hz and we simply skip most of them. Skipping
+-- is the entire saving: waking the timer thread is free, and walking the object array is not.
+local scanEvery = 1
+local ticksWaited = 0
+
 LoopAsync(POLL_MS, function()
+    if not enabled then return false end
+
+    -- Most ticks end here, having touched nothing at all.
+    ticksWaited = ticksWaited + 1
+    if ticksWaited < scanEvery then return false end
+    ticksWaited = 0
+
     -- Cheap off-thread check first; only hop onto the game thread when there is a selector to
     -- act on. apply() re-runs FindAllOf on the game thread (its handles must be game-thread
     -- ones) and folds the count report in — so a resident menu costs one on-thread scan, and
     -- an absent one costs zero.
-    if enabled and anySelectorResident() then
+    if not anySelectorResident() then
+        -- Nothing here. Ask less often, up to the ceiling. A raid or a load screen converges
+        -- on IDLE_MAX_TICKS after a handful of scans and stays there.
+        scanEvery = math.min(scanEvery * 2, IDLE_MAX_TICKS)
+    else
+        -- Snap back to every tick. Responsiveness only matters where a selector exists, and
+        -- that is exactly where this branch runs, so the fast cadence costs nothing anywhere
+        -- it is not needed — and prune() in particular has to stay quick off Init(), which
+        -- rebuilds the tiles and undoes the last pass.
+        scanEvery = 1
         -- The wrapper that v0.1 was missing.
         ExecuteInGameThread(function()
             local applied, _, pruned, restored = apply(false)
@@ -293,6 +347,10 @@ end)
 -- this a bare toggle, which looked broken because it produced no effect on its own.
 RegisterConsoleCommandHandler("cmsfunlock", function()
     enabled = true
+    -- Re-arm the poll at full speed. Running this by hand means someone is standing at the
+    -- menu right now, and leaving the backoff wherever an idle raid parked it would make the
+    -- next automatic pass up to IDLE_MAX_TICKS late.
+    scanEvery, ticksWaited = 1, 0
     ExecuteInGameThread(function()
         local applied, seen, pruned, restored = apply(true)
         log(string.format("apply: %d changed / %d selector(s) found, %d slot(s) hidden",
@@ -316,5 +374,5 @@ RegisterConsoleCommandHandler("cmsfnoprune", function()
     return true
 end)
 
-log("loaded — selector will list every skin, and unclaimed CMSF slots are hidden.")
+log("v" .. VERSION .. " loaded — selector will list every skin, and unclaimed CMSF slots are hidden.")
 log("  `cmsfunlock` force + report   `cmsfoff` disable   `cmsfnoprune` show unclaimed slots")

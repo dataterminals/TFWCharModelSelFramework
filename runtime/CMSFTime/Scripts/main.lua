@@ -67,4 +67,51 @@ RegisterConsoleCommandHandler("cmsftime", function()
     return true
 end)
 
-log("loaded. Open a skin menu, then run `cmsftime`.")
+-- ---------------------------------------------------------------------------------------
+-- What does ONE FindAllOf walk cost?
+--
+-- CMSFUnlock's poll is built out of this call, and every decision about it so far has been
+-- made on reasoning rather than a number. v0.2.0 moved the walk off the game thread on the
+-- theory that on-thread was the cost; a player reported the hitch was better but still there,
+-- in raids too, so the walk itself is not free wherever it runs. v0.2.1 backs the idle poll
+-- off to one walk per 8 s. Whether 8 s is right, generous, or nowhere near enough depends on
+-- a figure nobody has measured.
+--
+-- HOW TO READ IT. Run it twice, and the second run is the important one:
+--   * in the READY ROOM, where the selector is resident and the walk finds something
+--   * in a RAID, where it finds nothing and therefore cannot early-out — this is the case
+--     the backoff exists for, and the one the player is complaining about
+-- A walk that costs a fraction of a millisecond means the backoff is over-cautious and the
+-- remaining hitch is somewhere else entirely. A walk in the multiple-milliseconds range is a
+-- dropped frame every time it lands, and says the poll has to go away completely rather than
+-- merely slow down.
+--
+-- SAFETY. FindAllOf is a read. This constructs nothing, writes nothing, and calls no method
+-- on anything it finds — the same read-only presence check CMSFUnlock's gate already does,
+-- just timed. It runs on the game thread because that is the number that matters: what the
+-- walk costs where it can actually cause a hitch.
+local SCAN_REPS = 20
+
+RegisterConsoleCommandHandler("cmsfscan", function()
+    ExecuteInGameThread(function()
+        local t0 = os.clock()
+        local last
+        for _ = 1, SCAN_REPS do last = FindAllOf(WIDGET) end
+        local ms = (os.clock() - t0) * 1000 / SCAN_REPS
+
+        -- #found is unreliable on the table UE4SS hands back; count it by walking.
+        local n = 0
+        if last then for _ in pairs(last) do n = n + 1 end end
+
+        log(string.format("FindAllOf(%s): %.3f ms/walk  (%d found, mean of %d)",
+            WIDGET, ms, n, SCAN_REPS))
+        if n == 0 then
+            log("  0 found — this is the raid case, the one the idle backoff is sized against")
+        else
+            log("  now run it again in a raid, where the walk cannot early-out")
+        end
+    end)
+    return true
+end)
+
+log("loaded.  `cmsftime` Init() cost (open a skin menu first)   `cmsfscan` FindAllOf cost")

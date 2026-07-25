@@ -24,6 +24,15 @@ parameter is a `uint8` enum by value, so it cannot type-confuse a pointer derefe
 safe class as the bool write `CMSFUnlock` has always done. It does **not** survive `Init()`,
 which rebuilds the tiles, so re-prune on each poll rather than once.
 
+**`FindAllOf` is a full walk of the object array, and the cost is the walk — not the thread it
+runs on.** Polling it at 1 Hz is a frame hitch in a shipped build whether or not it finds anything,
+and moving it off the game thread reduces that without removing it (measured the hard way: a player
+still reported hitching in raids, where the on-thread path does nothing at all). Treat any repeated
+`FindAllOf` as a cost to be made *rare*, not merely relocated. Handles it returns off-thread must
+not be carried onto the game thread — they can be collected in between — so an off-thread presence
+check has to be followed by an on-thread re-scan, which is a second walk. Budget for that. The
+running record of this is [09-stutter.md](09-stutter.md).
+
 ## Build tooling (retoc / UAssetAPI)
 
 **Verify package identity by whole name-map entries, not byte scans.** `SK_SCV_FL_OCT_Skeleton`

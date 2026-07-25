@@ -16,7 +16,7 @@ Three audiences, and they want different things:
 ## A. Nexus mod page — the framework
 
 **Title:** CMSF - Character Model Selection Framework
-**Version:** 0.2.0
+**Version:** 0.2.1
 
 ### Short description (the one-liner Nexus shows in listings)
 
@@ -127,7 +127,28 @@ and Archengius) and [UE4SS](https://github.com/UE4SS-RE/RE-UE4SS).
 
 ---
 
-## C. Announcement / release notes — v0.2.0
+## C. Announcement / release notes
+
+### v0.2.1 — DRAFT, and do not post it yet
+
+Blocked on in-game verification. v0.2.0's stutter fix went out on reasoning alone and a player
+reported the hitch was better but still there, so nothing below gets published until someone has
+watched a frametime graph. Write the number in before posting — "reduced" is what was claimed
+last time.
+
+> **CMSF v0.2.1 — the skin menu poll stops hitching**
+>
+> CMSFUnlock watches for the skin selector so it can unfilter it. That watch was a full scan of
+> the game's object table, once a second, forever — including in raids, where the skin menu does
+> not exist. v0.2.0 moved the scan off the game thread, which helped and was not enough: the scan
+> costs wherever it runs. v0.2.1 also makes it *rare*, backing off to one scan every 8 seconds
+> whenever there is no menu around, and snapping back the instant there is.
+>
+> No behaviour change. The selector still unfilters, unclaimed slots still hide.
+
+---
+
+### v0.2.0 — shipped
 
 > **CMSF v0.2.0 — skins that add instead of overwrite**
 >
