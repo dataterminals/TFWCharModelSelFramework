@@ -86,11 +86,30 @@ end)
 -- dropped frame every time it lands, and says the poll has to go away completely rather than
 -- merely slow down.
 --
--- SAFETY. FindAllOf is a read. This constructs nothing, writes nothing, and calls no method
--- on anything it finds — the same read-only presence check CMSFUnlock's gate already does,
--- just timed. It runs on the game thread because that is the number that matters: what the
--- walk costs where it can actually cause a hitch.
+-- FIELD TEST #1, 2026-07-26 (docs/09-stutter.md): the gate opened 7.5 s after launch, AT THE
+-- MAIN MENU — the session never reached the hub — so something selector-classed is resident
+-- from the frontend on, and it pins CMSFUnlock's poll at one on-thread walk per second. WHAT
+-- it is decides the next fix, and a count cannot say. So this prints the NAME of everything
+-- found:
+--   Default__WBP_SkinSelection_C   the class-default object, mere collateral of the class
+--                                  being loaded -> teach residency to ignore CDOs
+--   anything else                  a real constructed widget at the menu -> the whole
+--                                  absence-based gate design is wrong, not just its filter
+--
+-- SAFETY. FindAllOf is a read, and the name pass calls only GetFullName()/IsValid() — no-arg
+-- calls of the same class rung 9 already relies on, all on the game thread, where the number
+-- matters: what the walk costs where it can actually cause a hitch.
 local SCAN_REPS = 20
+
+-- GetFullName can hand back an FString-ish rather than a Lua string; coerce or admit failure.
+local function fullname(o)
+    local s
+    if not pcall(function() s = o:GetFullName() end) then return "<GetFullName threw>" end
+    if type(s) == "string" then return s end
+    local t
+    if pcall(function() t = s:ToString() end) and type(t) == "string" then return t end
+    return tostring(s)
+end
 
 RegisterConsoleCommandHandler("cmsfscan", function()
     ExecuteInGameThread(function()
@@ -105,13 +124,72 @@ RegisterConsoleCommandHandler("cmsfscan", function()
 
         log(string.format("FindAllOf(%s): %.3f ms/walk  (%d found, mean of %d)",
             WIDGET, ms, n, SCAN_REPS))
+
+        -- Name everything: the fix hangs on asset-resident versus live (see header).
+        local firstObj
+        if last then
+            local shown = 0
+            for _, o in pairs(last) do
+                if not firstObj then firstObj = o end
+                shown = shown + 1
+                if shown > 8 then log("  ... more not shown"); break end
+                local ok = false
+                pcall(function() ok = o:IsValid() end)
+                log(string.format("  found: %s%s", fullname(o),
+                    ok and "" or "   [IsValid()=false]"))
+            end
+        end
+
+        -- The exact class path, for v0.3's NotifyOnNewObject registration — the repo never
+        -- recorded it, and guessing package paths is how mods break across game patches.
+        if firstObj then
+            local cls
+            pcall(function() cls = firstObj:GetClass() end)
+            if cls ~= nil then log("  class: " .. fullname(cls)) end
+        end
+
         if n == 0 then
-            log("  0 found — this is the raid case, the one the idle backoff is sized against")
+            log("  0 found — the backoff is genuinely allowed to engage here")
         else
-            log("  now run it again in a raid, where the walk cannot early-out")
+            log("  run this at the menu, in the hub, and in a raid — paste all three")
         end
     end)
     return true
 end)
+
+-- ---------------------------------------------------------------------------------------
+-- v0.3 PROBE — can construction events replace the poll on THIS build (UE4SS 3.0.1-894)?
+--
+-- The endgame in docs/09-stutter.md is event-driven: no FindAllOf outside boot, ever. That
+-- needs NotifyOnNewObject to actually fire here, which nobody has verified — and shipping an
+-- unverified event path is the exact shape of the v0.1 failure. So: register on the UMG base
+-- class (the selector's own BP class path was never recorded; cmsfscan now prints it), filter
+-- by class name, and LOG ONLY. The object is mid-construction when this fires — the game has
+-- not initialised it — so nothing here touches it beyond reading its name.
+--
+-- What the next session's log should show, if the mechanism works:
+--   * a burst of NOTIFY lines with /Engine/Transient-rooted names when the frontend builds
+--     its four panels (~7 s after boot), and again on every raid -> hub return
+--   * possibly /Game/-rooted ones as the asset template loads — v0.3 must ignore those, the
+--     same live-versus-template split CMSFUnlock v0.2.2 uses
+-- Zero NOTIFY lines across a menu -> raid -> menu cycle = the mechanism is dead on this
+-- build, and v0.3 falls back to gating on the hub map instead.
+local notifySeen = 0
+local okReg, errReg = pcall(function()
+    NotifyOnNewObject("/Script/UMG.UserWidget", function(obj)
+        local nm
+        pcall(function() nm = obj:GetFullName() end)
+        nm = tostring(nm)
+        if nm:find("WBP_SkinSelection_C", 1, true) ~= nil then
+            notifySeen = notifySeen + 1
+            log(string.format("NOTIFY #%d: selector constructed: %s", notifySeen, nm))
+        end
+    end)
+end)
+if okReg then
+    log("v0.3 probe armed: NotifyOnNewObject(/Script/UMG.UserWidget) registered")
+else
+    log("v0.3 probe DEAD on this build: " .. tostring(errReg))
+end
 
 log("loaded.  `cmsftime` Init() cost (open a skin menu first)   `cmsfscan` FindAllOf cost")

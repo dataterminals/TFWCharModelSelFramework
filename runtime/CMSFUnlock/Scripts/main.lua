@@ -19,12 +19,12 @@
 -- in-game before release.
 --
 -- RULE: every line that reads, writes, or CALLS a UObject runs inside ExecuteInGameThread.
--- The single thing allowed off the game thread is a read-only FindAllOf presence check that
--- gates whether to hop on at all (see anySelectorResident below). It constructs nothing,
--- reads no property and calls no method, so the v0.1.1 failure — off-thread writes silently
--- not taking — cannot apply to it. Every actual read/write/call still runs on the game thread.
+-- No exceptions. (v0.2.0–v0.2.1 carved out one — an off-thread FindAllOf presence gate; field
+-- test #2 measured an asset template keeping that gate permanently true, so it bought nothing
+-- and cost a second 35 ms walk per scan. v0.2.2 removed it and the rule is absolute again.)
 --
--- WHY THE GATE EXISTS. FindAllOf is a full walk of the object array. Running the whole poll
+-- WHY THE GATE EXISTED (v0.2.0 — removed in v0.2.2, see that stratum below).
+-- FindAllOf is a full walk of the object array. Running the whole poll
 -- body inside ExecuteInGameThread paid for that walk ON THE GAME THREAD every second forever,
 -- which is a frame hitch at the poll cadence whether or not a skin menu is anywhere near — the
 -- selector only exists in the ready room, not in a raid. The gate keeps the game thread idle
@@ -44,13 +44,33 @@
 -- land, long before anyone has navigated to the skin menu, and the manual `cmsfunlock` is
 -- still there if it ever does not.
 --
--- STILL OUTSTANDING. A ready room with a selector resident still pays one on-thread walk per
--- second, because apply() must re-run FindAllOf on the game thread (see the gate's note on
--- handle safety). Removing that needs an event to replace the poll entirely — a map-load hook
--- or NotifyOnNewObject — neither of which has been verified against this UE4SS build. Do not
+-- STILL OUTSTANDING (as of v0.2.1). A ready room with a selector resident still pays one
+-- on-thread walk per second, because apply() must re-run FindAllOf on the game thread.
+-- Removing that needs an event to replace the poll entirely — a map-load hook or
+-- NotifyOnNewObject — neither of which has been verified against this UE4SS build. Do not
 -- ship one on reasoning alone: that is precisely how v0.1 shipped a path that did nothing.
 -- `cmsfscan` in the CMSFTime dev mod measures what a single walk actually costs, so the next
 -- move can be sized off a number instead of an argument.
+--
+-- v0.2.2 — FIELD TEST #2 PUT NUMBERS AND NAMES ON ALL OF IT (docs/09-stutter.md).
+--   * One walk costs ~35 ms ON the game thread on the dev rig — two-plus dropped frames at
+--     60 fps every time one lands. The cadence was never the whole story; the walk is too
+--     expensive to run routinely at all.
+--   * FindAllOf finds FIVE selectors in the frontend: four live panels (GameInstance-owned,
+--     built at the MAIN MENU ~7 s after boot, surviving into the hub with stable identities,
+--     destroyed on raid entry) and one that is none of those — the WidgetTree TEMPLATE inside
+--     the WBP_PlayerStatusWidget asset, resident from menu load to process exit. THAT held
+--     the v0.2.0/v0.2.1 gate open everywhere, raids included, and disarmed the backoff within
+--     seconds of boot. "The selector only exists in the ready room" was wrong twice over.
+-- So v0.2.2: (1) live handles are CACHED — obtained on the game thread during a walk, then
+-- revalidated with IsValid() on every pass, so the frontend steady state walks ZERO times;
+-- (2) the backoff keys on "no LIVE selector" — the template no longer counts — so a raid pays
+-- at worst one walk per IDLE_MAX_TICKS seconds; (3) the off-thread gate is REMOVED (see RULE).
+-- The one genuinely new assumption: a cached handle whose object died reads as
+-- IsValid() == false instead of detonating. Everything is pcall'd, and the next field test
+-- exists to catch that before a player does. UNVERIFIED IN-GAME as written — house rule:
+-- say so until it is loaded. The endgame is still v0.3 event-driven construction hooks,
+-- which the CMSFTime probe interrogates on this build.
 --
 -- SAFETY RULES (each learned by breaking something)
 --   * Never invoke a native UFunction taking an object or struct parameter. `pcall` does
@@ -65,7 +85,7 @@
 -- Logged on load, because the only channel for a stutter report is someone reading it off
 -- their console — and "better but not gone" against v0.2.0 was nearly attributed to the wrong
 -- build. A tester should never have to guess which one they are running.
-local VERSION = "0.2.1"
+local VERSION = "0.2.2"
 
 local WIDGET = "WBP_SkinSelection_C"
 local POLL_MS = 1000         -- the tick; the object-array scan runs on a backoff MULTIPLE of it
@@ -219,78 +239,140 @@ local function reportCountForWidget(w)
     end
 end
 
--- Returns applied, seen, hidden, restored. MUST be called on the game thread.
+-- The per-widget enforcement body, shared by the walk path and the cached path.
+-- MUST be called on the game thread. Returns appliedDelta, prunedDelta, restoredDelta.
+local function enforceOne(w, verbose)
+    local applied = 0
+    local locked, readOk = nil, false
+    readOk = pcall(function() locked = w.SelectLockedSkinsOnly end)
+
+    -- Act when it is filtered, and also when the flag cannot be read — being
+    -- permissive here is harmless (clearing an already-clear flag is a no-op) and
+    -- avoids the failure mode where an unreadable property silently disables the
+    -- whole mod, which is close to what v0.1 did.
+    if (not readOk) or locked ~= false then
+        pcall(function() w.SelectLockedSkinsOnly = false end)
+        pcall(function() w:Init() end)
+        applied = 1
+    end
+
+    -- After Init(), which rebuilds the tiles and so undoes any earlier prune.
+    -- Runs on every pass, not only when the filter changed: reopening the menu
+    -- repopulates the WrapBox without necessarily re-setting the flag.
+    local h, r = prune(w)
+
+    -- Always report the list size when asked, not only when something changed.
+    -- The poll usually gets there first, so the earlier "only on change" version
+    -- printed nothing on a manual run and left the count to be eyeballed off a
+    -- screenshot. This number is the actual verification: vanilla Scav Girl
+    -- unfiltered is 7, so anything above that is an appended CMSF skin.
+    if verbose then
+        local n = -1
+        pcall(function()
+            local kids = w.SkinOptions:GetAllChildren()
+            n = kids and #kids or -1
+        end)
+        if n >= 0 then
+            log(string.format("selector lists %d skin(s)%s", n,
+                n > 0 and "" or "  (open the skin menu, then re-run)"))
+        end
+    else
+        -- Poll path: report the count on change, reusing this same widget rather
+        -- than a fresh FindAllOf.
+        reportCountForWidget(w)
+    end
+    return applied, h, r
+end
+
+-- ---------------------------------------------------------------------------------------
+-- v0.2.2 — live instances versus the asset template.
+--
+-- Field test #2 named everything FindAllOf returns here: four live panels rooted under
+-- /Engine/Transient (runtime-constructed, GameInstance-owned), plus ONE object rooted under
+-- /Game/ — the WidgetTree template stored inside the WBP_PlayerStatusWidget asset. A /Game/
+-- root means asset-resident by definition: runtime widgets are constructed into transient
+-- outers, never into a cooked package. The template must not count as "a selector is
+-- present" — it is resident from menu load to process exit, and counting it is what held
+-- every earlier gate open. An unreadable name fails OPEN (treated as live): wrongly polling
+-- for a template costs a hitch, wrongly ignoring a real selector makes the mod do nothing,
+-- and v0.1 already demonstrated which of those is worse.
+local function isLiveInstance(w)
+    local nm
+    pcall(function() nm = w:GetFullName() end)
+    if nm ~= nil and type(nm) ~= "string" then nm = tostr(nm) end
+    if not nm then return true end
+    return nm:find(" /Game/", 1, true) == nil
+end
+
+-- Game-thread handles from the last walk. Revalidated with IsValid() before EVERY use; one
+-- stale entry dumps the lot and forces a walk. The handles were obtained on the game thread
+-- and are only ever touched on the game thread, so the RULE holds — this cache is what lets
+-- the frontend run walk-free at steady state.
+local liveCache = {}
+
+-- Returns applied, seen, pruned, restored, live. MUST be called on the game thread.
+-- This is the WALK path: one full FindAllOf (~35 ms on the dev rig — field test #2), then
+-- enforcement on everything found, and the live cache is rebuilt as a side effect. The
+-- template IS still enforced here (a cleared flag on the template is inherited by future
+-- instances, which is welcome) — but only once per walk, no longer once per second.
 local function apply(verbose)
+    liveCache = {}
     local found = FindAllOf(WIDGET)
     if not found then
         if verbose then log("no skin selector in memory — open the skin menu first") end
-        return 0, 0, 0
+        return 0, 0, 0, 0, 0
     end
 
-    local applied, seen, pruned, restored = 0, 0, 0, 0
+    local applied, seen, pruned, restored, live = 0, 0, 0, 0, 0
     for _, w in pairs(found) do
         if w:IsValid() then
             seen = seen + 1
-            local locked, readOk = nil, false
-            readOk = pcall(function() locked = w.SelectLockedSkinsOnly end)
-
-            -- Act when it is filtered, and also when the flag cannot be read — being
-            -- permissive here is harmless (clearing an already-clear flag is a no-op) and
-            -- avoids the failure mode where an unreadable property silently disables the
-            -- whole mod, which is close to what v0.1 did.
-            if (not readOk) or locked ~= false then
-                pcall(function() w.SelectLockedSkinsOnly = false end)
-                pcall(function() w:Init() end)
-                applied = applied + 1
+            if isLiveInstance(w) then
+                live = live + 1
+                liveCache[#liveCache + 1] = w
             end
-
-            -- After Init(), which rebuilds the tiles and so undoes any earlier prune.
-            -- Runs on every pass, not only when the filter changed: reopening the menu
-            -- repopulates the WrapBox without necessarily re-setting the flag.
-            local h, r = prune(w)
-            pruned, restored = pruned + h, restored + r
-
-            -- Always report the list size when asked, not only when something changed.
-            -- The poll usually gets there first, so the earlier "only on change" version
-            -- printed nothing on a manual run and left the count to be eyeballed off a
-            -- screenshot. This number is the actual verification: vanilla Scav Girl
-            -- unfiltered is 7, so anything above that is an appended CMSF skin.
-            if verbose then
-                local n = -1
-                pcall(function()
-                    local kids = w.SkinOptions:GetAllChildren()
-                    n = kids and #kids or -1
-                end)
-                if n >= 0 then
-                    log(string.format("selector lists %d skin(s)%s", n,
-                        n > 0 and "" or "  (open the skin menu, then re-run)"))
-                end
-            else
-                -- Poll path: report the count on change, reusing this same widget rather
-                -- than a fresh FindAllOf. (The old standalone reportCount() is gone.)
-                reportCountForWidget(w)
-            end
+            local a, h, r = enforceOne(w, verbose)
+            applied, pruned, restored = applied + a, pruned + h, restored + r
         end
     end
     if verbose and seen > 0 and applied == 0 then
         log(string.format("%d selector(s) were already unfiltered", seen))
     end
-    return applied, seen, pruned, restored
+    return applied, seen, pruned, restored, live
 end
 
--- The off-thread presence gate. FindAllOf here is the ONE UObject read allowed off the game
--- thread (see the RULE at the top): it reads no property and calls no method, so it cannot hit
--- the v0.1.1 off-thread-write failure — it only asks the object array whether a selector even
--- exists yet. When it does not (a raid, a load screen, anywhere but the ready room) the poll
--- returns without ever touching the game thread. Every read/write/call that follows still
--- happens on the game thread inside apply().
---
--- This is a real saving and it is NOT the whole fix — v0.2.0 shipped believing it was, and the
--- hitch survived. The walk itself costs, wherever it runs, so the caller also has to do it less
--- often; see the backoff below.
-local function anySelectorResident()
-    local found = FindAllOf(WIDGET)
-    return found ~= nil and next(found) ~= nil
+-- One poll pass. MUST be called on the game thread. The cached path costs a handful of
+-- property reads on four widgets — microseconds; the walk path costs the full ~35 ms scan.
+-- Steady state in the frontend is the cached path every time: the four panels are
+-- GameInstance-owned and keep their identities from the main menu through the hub (measured,
+-- field test #2), so the cache lives until a raid load tears the frontend down. Returns the
+-- aggregates the loop logs, plus live for the backoff decision.
+local function pollOnce()
+    if #liveCache > 0 then
+        local allValid = true
+        for _, w in ipairs(liveCache) do
+            local ok = false
+            pcall(function() ok = w:IsValid() end)
+            if not ok then
+                allValid = false
+                break
+            end
+        end
+        if allValid then
+            local applied, pruned, restored = 0, 0, 0
+            for _, w in ipairs(liveCache) do
+                local a, h, r = enforceOne(w, false)
+                applied, pruned, restored = applied + a, pruned + h, restored + r
+            end
+            return applied, pruned, restored, #liveCache
+        end
+        -- Something in the cache died — a map change. Fall through to a walk, which either
+        -- refills the cache (back in the frontend) or reports zero live (raid), and the
+        -- backoff takes it from there.
+        liveCache = {}
+    end
+    local applied, _, pruned, restored, live = apply(false)
+    return applied, pruned, restored, live
 end
 
 -- Backoff state. `scanEvery` is in ticks, not milliseconds, because LoopAsync's interval is
@@ -307,39 +389,41 @@ LoopAsync(POLL_MS, function()
     if ticksWaited < scanEvery then return false end
     ticksWaited = 0
 
-    -- Cheap off-thread check first; only hop onto the game thread when there is a selector to
-    -- act on. apply() re-runs FindAllOf on the game thread (its handles must be game-thread
-    -- ones) and folds the count report in — so a resident menu costs one on-thread scan, and
-    -- an absent one costs zero.
-    if not anySelectorResident() then
-        -- Nothing here. Ask less often, up to the ceiling. A raid or a load screen converges
-        -- on IDLE_MAX_TICKS after a handful of scans and stays there.
-        scanEvery = math.min(scanEvery * 2, IDLE_MAX_TICKS)
-    else
-        -- Snap back to every tick. Responsiveness only matters where a selector exists, and
-        -- that is exactly where this branch runs, so the fast cadence costs nothing anywhere
-        -- it is not needed — and prune() in particular has to stay quick off Init(), which
-        -- rebuilds the tiles and undoes the last pass.
-        scanEvery = 1
-        -- The wrapper that v0.1 was missing.
-        ExecuteInGameThread(function()
-            local applied, _, pruned, restored = apply(false)
-            if applied > 0 and not quiet then
-                quiet = true
-                log("selector unfiltered (will keep it that way)")
-            end
-            -- Tiles, not slots: the ready room holds four selector panels, so each slot
-            -- accounts for four tiles and the number is a multiple of what is on screen.
-            if pruned > 0 then
-                log(string.format("hid %d unclaimed CMSF tile(s)", pruned))
-            end
-            -- Worth its own line: a restore means a slot was hidden while its author's
-            -- texture was still resolving, and the next pass corrected it.
-            if restored > 0 then
-                log(string.format("restored %d claimed CMSF tile(s)", restored))
-            end
-        end)
-    end
+    -- Everything UObject happens on the game thread — the wrapper v0.1 was missing, and the
+    -- RULE, exception-free since v0.2.2. scanEvery is written in there and read out here;
+    -- UE4SS serialises access to the one Lua state, and the worst a stale read could cost is
+    -- a single early or late scan.
+    ExecuteInGameThread(function()
+        local applied, pruned, restored, live = pollOnce()
+
+        if live > 0 then
+            -- Live panels on hand: enforce at full cadence. prune() in particular has to
+            -- stay quick behind Init(), which rebuilds the tiles and undoes the previous
+            -- pass — and at 1 Hz the work is the CACHED path, property reads, not a walk.
+            scanEvery = 1
+        else
+            -- No live selector — a raid, a load screen, the first seconds of boot. Ask again
+            -- on the doubling schedule. The asset template alone no longer holds the cadence
+            -- at 1 Hz; counting it is what kept v0.2.0/v0.2.1 walking every second
+            -- everywhere, raids included (field test #2).
+            scanEvery = math.min(scanEvery * 2, IDLE_MAX_TICKS)
+        end
+
+        if applied > 0 and not quiet then
+            quiet = true
+            log("selector unfiltered (will keep it that way)")
+        end
+        -- Tiles, not slots: the ready room holds four selector panels, so each slot
+        -- accounts for four tiles and the number is a multiple of what is on screen.
+        if pruned > 0 then
+            log(string.format("hid %d unclaimed CMSF tile(s)", pruned))
+        end
+        -- Worth its own line: a restore means a slot was hidden while its author's
+        -- texture was still resolving, and the next pass corrected it.
+        if restored > 0 then
+            log(string.format("restored %d claimed CMSF tile(s)", restored))
+        end
+    end)
     return false      -- never stop
 end)
 
@@ -352,9 +436,9 @@ RegisterConsoleCommandHandler("cmsfunlock", function()
     -- next automatic pass up to IDLE_MAX_TICKS late.
     scanEvery, ticksWaited = 1, 0
     ExecuteInGameThread(function()
-        local applied, seen, pruned, restored = apply(true)
-        log(string.format("apply: %d changed / %d selector(s) found, %d slot(s) hidden",
-            applied, seen, pruned))
+        local applied, seen, pruned, restored, live = apply(true)
+        log(string.format("apply: %d changed / %d selector(s) found (%d live), %d slot(s) hidden",
+            applied, seen, live, pruned))
         if restored > 0 then log(string.format("  restored %d claimed tile(s)", restored)) end
     end)
     return true

@@ -129,20 +129,23 @@ and Archengius) and [UE4SS](https://github.com/UE4SS-RE/RE-UE4SS).
 
 ## C. Announcement / release notes
 
-### v0.2.1 — DRAFT, and do not post it yet
+### v0.2.2 — DRAFT, and do not post it yet
 
 Blocked on in-game verification. v0.2.0's stutter fix went out on reasoning alone and a player
-reported the hitch was better but still there, so nothing below gets published until someone has
-watched a frametime graph. Write the number in before posting — "reduced" is what was claimed
-last time.
+reported the hitch was better but still there; v0.2.1's went out the same way and lasted seven
+seconds against a field test. Nothing below gets published until someone has watched a frametime
+graph on v0.2.2. The numbers ARE in hand this time (one scan = ~35 ms on the game thread,
+measured 2026-07-26) — put the before/after in the post.
 
-> **CMSF v0.2.1 — the skin menu poll stops hitching**
+> **CMSF v0.2.2 — the skin menu poll stops hitching**
 >
 > CMSFUnlock watches for the skin selector so it can unfilter it. That watch was a full scan of
-> the game's object table, once a second, forever — including in raids, where the skin menu does
-> not exist. v0.2.0 moved the scan off the game thread, which helped and was not enough: the scan
-> costs wherever it runs. v0.2.1 also makes it *rare*, backing off to one scan every 8 seconds
-> whenever there is no menu around, and snapping back the instant there is.
+> the game's object table — measured at ~35 ms, two-plus dropped frames — once a second, forever,
+> including in raids. Two prior fixes moved and rationed that scan; both were defeated by a
+> quirk: the game keeps a selector *template* in memory from the main menu on, which made "is a
+> selector around?" always read yes. v0.2.2 recognises the template for what it is, caches the
+> real menu panels instead of re-scanning for them (the menus enforce with zero scans now), and
+> in a raid scans at most once every 8 seconds.
 >
 > No behaviour change. The selector still unfilters, unclaimed slots still hide.
 
