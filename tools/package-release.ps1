@@ -297,6 +297,33 @@ if (-not (Test-Path $retocLicense)) {
 }
 Copy-Item $retocLicense (Join-Path $authStaging "licenses\retoc-LICENSE.txt")
 
+# cmsf-author.exe is published SelfContained + PublishSingleFile, so its NuGet dependencies are
+# compiled INTO the exe rather than sitting beside it as DLLs. That is why the bundle has no
+# UAssetAPI.dll / Newtonsoft.Json.dll / ZstdSharp.dll -- a Nexus reviewer asked about exactly that
+# on 2026-07-26, reasonably, having seen the package references in the source.
+#
+# It also means this bundle REDISTRIBUTES all three. Every one is MIT, and MIT requires the notice
+# to travel with the copies -- so the notices ship here even though the code is invisible inside
+# the exe. Missing them is the same omission the retoc LICENSE check above exists to prevent, and
+# it went unnoticed until that Nexus question prompted a look.
+#
+# Vendored under tools\licenses\ rather than harvested from the NuGet cache at build time: the
+# cache is not guaranteed to exist on a build machine, and a notice that silently vanishes is
+# exactly the failure being guarded against. Throwing is deliberate -- add a dependency, add its
+# notice, or no release.
+$thirdParty = [ordered]@{
+    'UAssetAPI-LICENSE.txt'        = 'UAssetAPI (MIT) -- compiled into cmsf-author.exe'
+    'Newtonsoft.Json-LICENSE.txt'  = 'Newtonsoft.Json (MIT) -- transitive, compiled into cmsf-author.exe'
+    'ZstdSharp-LICENSE.txt'        = 'ZstdSharp.Port (MIT) -- transitive, compiled into cmsf-author.exe'
+}
+foreach ($name in $thirdParty.Keys) {
+    $src = Join-Path $repo "tools\licenses\$name"
+    if (-not (Test-Path $src)) {
+        throw "Third-party notice missing: tools\licenses\$name  ($($thirdParty[$name])). MIT requires it to ship."
+    }
+    Copy-Item $src (Join-Path $authStaging "licenses\$name")
+}
+
 # The example is BUILDABLE, not illustrative. Both its sources are /Game/ paths out of the
 # author's own cook, so dragging it onto the exe exercises the entire chain -- usmap, retoc,
 # Steam detection, clone, pack, verify -- and answers "is my setup right" before the author has
