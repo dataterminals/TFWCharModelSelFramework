@@ -1,10 +1,25 @@
 # The skin-menu stutter — what is known, and what is still guessed
 
-**LEADING SUSPECT as of field test #4 (2026-07-27): not the poll — `prune()`.** Downgraded from
-"solved" within the hour, on purpose: see *How thin this actually is* in that section. The
-diagnosis rests on a single ten-second window, because `cmsfnoprune` turned out to be a one-way
-switch and every later comparison was prune-off against prune-off. `cmsfprune` now exists so
-field test #5 can run the A/B properly.
+**STATUS after field test #5 (2026-07-27): v0.2.3 is quiet in every state tested, and `prune()` is
+the well-supported cause — not the poll.**
+
+The short version for anyone picking this up cold. The stutter tracked the *tile pruner*, not the
+object-array walk that v0.2.0–v0.2.2 all went after. v0.2.3 memoises each tile's verdict by row
+name instead of re-deriving it every second, and on its first live run nothing stutters anywhere:
+tiles resident, poll running, pruning on, multiple toggle cycles, all fine.
+
+Two honest caveats, both detailed in field tests #4 and #5:
+
+1. The causal claim rests on **one ten-second window** — the only interval ever observed with
+   v0.2.2's expensive prune and the tiles actually resident. `cmsfnoprune` was a one-way switch
+   (fixed: `cmsfprune` now exists), so every other comparison in that session was prune-off
+   against prune-off.
+2. Field test #5's A/B ran on v0.2.3, **whose whole point is making prune cheap** — so it cannot
+   separate "prune was the cause and the fix works" from "prune was never the cause". The
+   cross-version table in #5 is what carries the argument.
+
+Net: coherent across four states and two builds, resting on one narrow positive. Far stronger than
+anything the first three fixes had, and still not proof.
 
 Read that section first; most of what follows it was written while chasing the wrong object and
 is kept only because the wrong turns are instructive.
@@ -428,6 +443,49 @@ Do **not** ship this on reasoning. The three-state `cmsfoff` / `cmsfunlock` / `c
 above is now the regression test: after v0.2.3, plain `cmsfunlock` should feel like `cmsfnoprune`
 does today.
 
+## Field test #5 — 2026-07-27: v0.2.3 is quiet everywhere, and the A/B cannot close the loop
+
+v0.2.3's first live run, and the verdict on the build is unambiguous: **"yeah it's been fine"** —
+no stutter in any state, with the tiles resident and the poll running throughout. Multiple
+`cmsfprune` / `cmsfnoprune` cycles, nothing felt in either.
+
+**A confound caught mid-test, worth recording because it nearly wasted the session.** The first
+"prune ON" judgement measured nothing at all. `SkinOptions` has no children until the skin menu has
+been opened, so `prune` called `GetAllChildren()`, got nothing back, and returned immediately —
+zero tiles to inspect, zero cost. The log gave it away by omission: no `skin menu open: 39 skin(s)`
+and no `hid 128`. **The pruner cannot be tested until the menu has been opened once.** Field test
+#4 happens to be safe on this axis — the menu was opened at 10:06:43, well before that session's
+`cmsfoff` cycle. The corrected run opened the menu at 10:34:30 (`39 listed`, `hid 128`) and gave a
+genuine 21-second prune-ON window.
+
+### Why this A/B could not settle causation, and what did
+
+The A/B was run on **v0.2.3, whose entire purpose is making prune cheap.** So "prune ON feels
+fine" is what *both* live hypotheses predict — that prune was the cause and the memoisation fixed
+it, or that prune was never the cause. Running the toggle on the fixed build cannot separate them.
+That limitation is structural, not a mistake in execution; the discriminating test would need
+v0.2.2's un-memoised prune with tiles resident.
+
+What *does* discriminate is the **cross-version comparison**, same rig, same day, 25 minutes apart:
+
+| Build | Tiles resident | Pruning | Result |
+|---|---|---|---|
+| v0.2.2 | yes | **on** | **stutter** (10:09:42) |
+| v0.2.2 | yes | off | fine (10:09:52 →) |
+| v0.2.3 | yes | **on** | **fine** (10:34:30 →) |
+| v0.2.3 | yes | off | fine (10:34:51 →) |
+
+That is exactly the pattern the prune hypothesis predicts, and the only thing changed between rows
+2 and 3 is the memoisation. The weak link remains the same single observation it has always been:
+row 1 is one ten-second window, reported by feel, never repeated. **So: prune is a well-supported
+cause and v0.2.3 is a working fix, on evidence that is coherent across four states and two builds
+but rests on one narrow positive.** That is stronger than anything v0.2.0–v0.2.2 ever had, and
+still short of proof.
+
+If someone wants to close it properly, the test is cheap: stage v0.2.2's `slotState` (or gate the
+memoisation behind a flag), open the menu, and cycle `cmsfprune` / `cmsfnoprune` a few times. Until
+then this stays a strong lead rather than a closed case, and the header says so.
+
 ## What is actually established, versus assumed
 
 Established as of field test #2: one walk = **~35 ms on the game thread**, regardless of hit
@@ -469,8 +527,15 @@ Also settled in field test #4, both of them things this document had listed as o
 - **The exact class path for v0.3 registration**, which this repo had never recorded:
   `WidgetBlueprintGeneratedClass /Game/FW/UI/MainMenu/UMG/Panels/WBP_SkinSelection.WBP_SkinSelection_C`
 
-**Still assumed, or simply unmeasured:** v0.2.3 itself — written, syntax-checked and staged, but
-never run in-game; the four-state table is its regression test. The in-place tile rebuild around
+Added by field test #5: **v0.2.3 runs clean** — loaded, enforced, pruned 128 tiles on menu open,
+handled a single-panel rebuild (`hid 32`) and several cache-clearing `cmsfprune` cycles without a
+crash or an error line, and felt fine throughout. Also established the hard way: **the pruner
+cannot be tested before the skin menu has been opened**, because `SkinOptions` has no children
+until then and `prune` early-returns on an empty child list.
+
+**Still assumed, or simply unmeasured:** whether prune is *truly* the cause, which needs v0.2.2's
+un-memoised `slotState` A/B'd with tiles resident — field test #5 could not settle it because it
+ran on the fixed build. The in-place tile rebuild around
 an escape-menu open still has no identified trigger, though it matters much less now: with the
 verdict cached a rebuild costs one re-derive rather than a permanent per-second tax. And a
 `Error: A custom console command handle must return true or false` line appears in the log roughly
