@@ -1,19 +1,21 @@
 # The skin-menu stutter — what is known, and what is still guessed
 
-Live thread. `CMSFUnlock` polls for the skin selector, and that poll has been a frame hitch since
-v0.1.1. Three fixes have now shipped for it. v0.2.2 is the first one **field-tested**, and its
-internals check out — the cache works, the event mechanism v0.3 wants is confirmed alive
-(field test #3).
+**SOLVED, field test #4 (2026-07-27). The cause was never the poll. It is `prune()`.**
 
-**The stutter itself is not fixed.** It is still reported in the Innards raid map and at the menu
-under v0.2.2. That is the third consecutive fix aimed at this poll that has not made the felt
-problem go away, and it is now the strongest available evidence that **the poll was never the
-cause** — because v0.2.2 demonstrably does no object-array walk in the frontend, and at most one
-per eight seconds in a raid. The mechanism that made "it's ours" the obvious reading is gone.
+Read that section first; most of what follows it was written while chasing the wrong object and
+is kept only because the wrong turns are instructive.
 
-**`cmsfoff` has still never been run while the stutter is being felt.** Three fixes, three field
-tests, and the one three-second test that would settle attribution has not happened. Nothing else
-in this document should be acted on before it does.
+The one-line version: `enforceOne` calls `prune(w)` on **every pass, for every panel,
+unconditionally**, and `prune` re-derives each tile's claimed/unclaimed verdict from scratch —
+about 128 tiles × five reflective UObject reads plus 128 `GetFullName()` calls, every second, on
+the game thread. It logs **only when it changes a tile's visibility**, so a pass that inspects all
+128 and changes nothing is completely silent. Three consecutive fixes optimised `FindAllOf` while
+this sat one line below the code they were editing.
+
+The cost of not measuring: v0.2.0, v0.2.1 and v0.2.2 were each shipped on reasoning, each
+genuinely made the poll cheaper, and none of them touched the actual cause. A single three-second
+`cmsfoff` in field test #1 would have got there four versions earlier. **Measure first** is the
+whole lesson of this document.
 
 ## The mechanism
 
@@ -243,7 +245,7 @@ the stutter was noticed *after opening the escape menu*. Something in that UI pa
 tiles in place. Worth understanding, but 128 visibility writes twice in three minutes is not a
 1 Hz heartbeat.
 
-### The gap this session leaves
+### The gap this session leaves *(closed by field test #4, same day)*
 
 **`cmsfoff` was not run, so the stutter — menu or raid — remains unattributed to anything.** It is
 the same test this doc has asked for since field test #1, and skipping it has now cost three
@@ -275,6 +277,93 @@ Next session, attribution before anything else, and nothing else until it is don
 4. Only if it *does* track `cmsfoff`: `cmsfscan` for names and cost, then raid → **return to the
    hub** and watch for NOTIFY #11+ to settle v0.3's event coverage.
 
+## Field test #4 — 2026-07-27: attribution, at last, and it is not the poll
+
+The `cmsfoff` test this document had been asking for since field test #1 finally happened. Three
+states, felt at the frontend, all three agreeing:
+
+| State | Poll running? | Tile inspection? | Stutter |
+|---|---|---|---|
+| `cmsfoff` (10:07:09) | no | no | **gone** |
+| `cmsfunlock` (10:09:42) | yes | yes | **back** |
+| `cmsfnoprune` (10:09:52) | **yes** | no | **gone** |
+
+The third row is the one that settles it. With the poll, the enforcement and the 1 Hz cadence all
+still running, disabling *only* the tile inspection removes the stutter. **The poll is exonerated
+and `prune()` is the cause.** Both directions were confirmed rather than one, so this is not a
+coincidence of timing.
+
+### The mechanism, in the code
+
+[`enforceOne`](../runtime/CMSFUnlock/Scripts/main.lua) calls `prune(w)` unconditionally on every
+pass — not gated on the filter having changed, deliberately, because reopening the menu
+repopulates the WrapBox without necessarily re-setting the flag. `prune` then walks
+`SkinOptions:GetAllChildren()` and calls `slotState(t)` per tile, which per CMSF tile does:
+
+1. `tostr(t.SkinRow.RowName)` — struct member through a RemoteUnrealParam wrapper, plus `ToString`
+2. `unwrap(t.SkinIcon)` → `unwrap(img.Brush)` → `unwrap(brush.ResourceObject)` — three more
+   wrapped reads, each with a `pcall` and a `:get()`
+3. `tostr(res:GetFullName())` — a **string-building UObject call**, the expensive one
+
+Four panels × 32 CMSF tiles = **128 tiles, ~640 reflective operations and 128 `GetFullName()`
+calls, per second, on the game thread.** That is the heartbeat. It is the same shape as the
+`Init()`-every-pass suspect this document chased and cleared in field test #2 — and it was one
+line further down the same function the whole time.
+
+**Why it stayed invisible.** `prune` returns counts, and the loop logs `hid N` only when
+`N > 0` — i.e. only when a tile's visibility actually *changed*. Steady state changes nothing,
+so 128 tile inspections per second produce zero log output. Field test #3 read the sparse `hid`
+lines as evidence the per-pass path was cheap. They were evidence of nothing at all.
+
+**Supporting number, from the `cmsfunlock` run.** Verbose mode logs once per panel, and those four
+lines came 18 ms apart (10:09:42.142 / .161 / .179 / .198): **~18 ms per panel** for `Init()` plus
+a 32-tile prune, ~72 ms for the set. Field test #2's 35 ms was the walk; this is a second,
+independent, larger cost that nobody had measured.
+
+**Bonus finding:** `apply: 4 changed / 5 selector(s) found (4 live)` after two minutes of
+`cmsfoff` — the game had re-filtered all four panels in that window. Enforcement genuinely cannot
+be one-shot; the flag really does get re-set.
+
+### Why three fixes all missed, and why the raid reports conflicted
+
+The menu and the raid had **different causes**, which is exactly why fixing either one never
+resolved "the stutter":
+
+- **In a raid** the four panels are destroyed, so `prune` has nothing to walk. The cost there was
+  the 1 Hz `FindAllOf` — held at full cadence by the asset template — and **v0.2.2 genuinely fixed
+  it.** That is the mid-session *"the raid feels fine, honestly."*
+- **At the menu** the panels exist, so `prune` runs on all four every second. No version has ever
+  touched it. That is every "still stuttering" report, in every field test.
+
+The Innards report still needs its own `cmsfoff`: v0.2.2 leaves at most one 35 ms walk per 8 s
+there, which does not match a continuous hitch, and Innards has vanilla traversal and
+shader-compilation stutter of its own. Frontend attribution does not transfer to a raid map.
+
+### What v0.2.3 must do
+
+The verdict for a row is **stable once resolved** — `CMSF.Girl.00` either has a texture at
+`/Game/CMSF/Girl/00/T_CMSF_Girl_00` or it does not, and a pak does not mount mid-session. So the
+per-second re-derivation buys nothing. Reuse the pattern field test #3 already proved works for the
+panel cache:
+
+1. **Cache tile handles plus their resolved verdicts per panel.** A pass revalidates handles with
+   `IsValid()`; if they all hold, the tiles were not rebuilt and the pass can **skip entirely**.
+   Steady state becomes four `IsValid()` calls per second.
+2. **A dead handle means `Init()` rebuilt the tiles** — dump that panel's cache, re-derive once,
+   re-cache. Exactly the invalidation shape that survived a frontend rebuild and raid entry.
+3. **Memoise `slotState` by row name** for the re-derive path, so even a rebuild pays the
+   `GetFullName()` cost once per row per session rather than once per pass.
+4. **Keep fail-open intact.** A `nil` verdict (icon not resolved yet — the claim race) must stay
+   *uncached* so it is retried; that is what makes a transient misread self-correct, and rung 9
+   already learned that lesson the hard way.
+5. **The endgame is events.** `NotifyOnNewObject` is confirmed working (field test #3), so v0.3
+   can register `WBP_SkinButton_C` construction and prune on that signal alone — no polling, no
+   revalidation.
+
+Do **not** ship this on reasoning. The three-state `cmsfoff` / `cmsfunlock` / `cmsfnoprune` table
+above is now the regression test: after v0.2.3, plain `cmsfunlock` should feel like `cmsfnoprune`
+does today.
+
 ## What is actually established, versus assumed
 
 Established as of field test #2: one walk = **~35 ms on the game thread**, regardless of hit
@@ -291,17 +380,24 @@ freshly constructed panels); **`Init()` does not re-run per pass** (the unsuppre
 fired twice in three minutes, not 180 times); **`NotifyOnNewObject` fires for runtime-constructed
 panels**, not just templates, which clears v0.3's event path.
 
-All of that is about v0.2.2's *internals*. **None of it is a fix to the reported stutter**, which
-survives at the menu and in Innards.
+All of that is about v0.2.2's *internals*, and all of it held up.
 
-**Still assumed, or simply unmeasured — and the first item now dominates the others:** that this
-poll is what the player is feeling *at all*. It has never once been tested with `cmsfoff`, three
-fixes have failed to shift the symptom, and v0.2.2's remaining cost (zero walks in the frontend,
-one per 8 s in a raid) does not match a continuous or ~1 Hz hitch. Treat CMSF as an unproven
-suspect, not a confirmed one. Beyond that: whether NOTIFY fires on a **raid → hub return** is
-unknown (no return happened) and v0.3's design depends on it; the ~35 ms walk cost has not been
-re-measured since field test #2; and whatever rebuilds the ready-room tiles in place — no NOTIFY,
-yet a full 32 × 4 re-prune, reportedly around an escape-menu open — is unidentified.
+Added by field test #4, and this is the load-bearing one: **the frontend stutter is `prune()`**,
+established by a three-state test whose middle state keeps the poll running — `cmsfoff` quiet,
+`cmsfunlock` stuttering, `cmsfnoprune` quiet again. **The poll is exonerated at the frontend.**
+Per-panel enforcement measured at **~18 ms** (`Init()` + a 32-tile prune), ~72 ms for four. The
+game **re-filters all four panels** if enforcement is absent for ~2 minutes, so enforcement cannot
+be one-shot. And a single-panel rebuild (`hid 32`, one panel's worth) fires on menu *interaction*,
+confirming the prune's *logged* work is event-driven even though its *unlogged* work is per-pass.
+
+**Still assumed, or simply unmeasured:** whether the **Innards** report has the same cause — it
+cannot be `prune` (no panels exist in a raid) and v0.2.2 leaves only one 35 ms walk per 8 s there,
+so it needs its own `cmsfoff` before CMSF is blamed or cleared; Innards also has vanilla traversal
+and shader hitching. Whether NOTIFY fires on a **raid → hub return** is still unknown (no return
+has happened in two sessions) and v0.3's event design depends on it. The ~35 ms walk cost has not
+been re-measured since field test #2. And the in-place tile rebuild around an escape-menu open
+still has no identified trigger, though it now matters much less: with the verdict cached, a
+rebuild costs one re-derive instead of a permanent per-second tax.
 
 The original sizing table, kept for the record — the third row is what fired (35 ms), which is
 why v0.2.2 caches instead of merely rationing:
@@ -312,7 +408,13 @@ why v0.2.2 caches instead of merely rationing:
 | Around 1 ms | Backoff is roughly right; a raid now hitches once per 8 s instead of every second | Tune `IDLE_MAX_TICKS`, ship |
 | **Several ms** ← this one | Every landed scan drops a frame, and rarity is not enough | The poll has to go away entirely — v0.2.2's cache + the v0.3 event probe |
 
-## The suspect nobody has ruled out
+## The suspect nobody has ruled out *(resolved: the suspect was next door — see field test #4)*
+
+*This section had the right instinct and the wrong line. It suspected `Init()` running every pass,
+invisibly, because the log suppresses repeats — and field test #2 cleared `Init()`. The actual
+culprit was `prune()`, called on the line immediately after, invisible for exactly the reason
+described below. Kept verbatim as a record of how close a correct instinct can get while still
+naming the wrong function.*
 
 `apply()` calls `w:Init()` whenever `SelectLockedSkinsOnly` reads as anything but `false`, **or
 when the read fails**. If the game re-sets that flag on each panel rebuild, or the read is
