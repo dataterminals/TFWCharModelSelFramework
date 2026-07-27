@@ -85,7 +85,28 @@
 -- Logged on load, because the only channel for a stutter report is someone reading it off
 -- their console — and "better but not gone" against v0.2.0 was nearly attributed to the wrong
 -- build. A tester should never have to guess which one they are running.
-local VERSION = "0.2.2"
+-- v0.2.3 — THE STUTTER WAS prune(), AND IT WAS NEVER THE POLL (field test #4, 2026-07-27).
+-- Measured, finally, instead of argued. Three states felt at the frontend: `cmsfoff` quiet,
+-- `cmsfunlock` stuttering, `cmsfnoprune` quiet again. That third state leaves the poll, the
+-- enforcement and the 1 Hz cadence all running and disables only the tile inspection — so the
+-- object-array walk that v0.2.0, v0.2.1 and v0.2.2 each went after is EXONERATED at the frontend,
+-- and every one of those three fixes was aimed at the wrong function.
+--
+-- The cost: enforceOne calls prune(w) unconditionally every pass, and prune called slotState on
+-- every tile, whose icon chain is four wrapped reads plus a GetFullName() string build. Four
+-- panels x 32 CMSF tiles = ~640 reflective operations and 128 GetFullName() calls PER SECOND on
+-- the game thread. Verbose enforcement measured ~18 ms per panel, ~72 ms for the set — twice
+-- field test #2's 35 ms walk, and nobody had ever measured it.
+--
+-- Why it hid for four versions: prune reports counts, and the loop logs `hid N` only when N > 0,
+-- i.e. only when a visibility actually CHANGED. Steady state changes nothing, so 128 tile
+-- inspections per second printed absolutely nothing. Field test #3 read that silence as proof the
+-- per-pass path was cheap. This file's own "suspect nobody has ruled out" note predicted exactly
+-- this failure mode and named Init() — one line above the function that was really doing it.
+--
+-- The fix below caches the VERDICT by row name. See the note over verdictByRow for what is
+-- deliberately not cached, and why a tile-handle cache is NOT used (pooling).
+local VERSION = "0.2.3"
 
 local WIDGET = "WBP_SkinSelection_C"
 local POLL_MS = 1000         -- the tick; the object-array scan runs on a backoff MULTIPLE of it
@@ -168,10 +189,31 @@ end
 -- pass hid all 32 Girl slots including the one Octogirl had claimed, and a panel rebuilt
 -- ~6 s later got it right. Treating "not loaded yet" as "nothing shipped here" hides a real
 -- skin, which is the exact failure the fail-open rule exists to prevent.
-local function slotState(t)
-    local row
-    pcall(function() row = tostr(t.SkinRow.RowName) end)
-    if not row then return nil end
+--
+-- v0.2.3 — DERIVED ONCE PER ROW, NOT ONCE PER PASS. This is the stutter fix; see the v0.2.3
+-- stratum at the top of the file for the measurement that found it.
+--
+-- The saving rests on the verdict being STABLE for the session: row CMSF.Girl.00 either has a
+-- package at /Game/CMSF/Girl/00/T_CMSF_Girl_00 or it does not, and a pak cannot mount mid-session.
+-- A resolved answer is therefore cached by row name and the icon chain — three wrapped reads and
+-- a GetFullName() string build, the expensive part — never runs for that row again.
+--
+-- WHAT IS DELIBERATELY NOT CACHED: a nil verdict. nil means "cannot tell YET" — the claim race
+-- where an author's texture has not resolved on the menu's first population (measured 2026-07-21:
+-- the first pass misread all 32 Girl slots, a rebuild ~6 s later got it right). Caching nil would
+-- freeze a real skin as hidden for the rest of the session, which is precisely the failure the
+-- fail-open rule exists to prevent. Absence from this table IS the retry.
+--
+-- WHY NOT CACHE PER TILE, which would also skip the Visibility read: WBP_SkinButton_C instances
+-- are POOLED across the four ready-room panels (see the rung 9 note above), so a tile handle does
+-- not identify a slot — the same object turns up later holding a different SkinRow. The row must
+-- be re-read every pass to know what a tile currently IS. A handle-keyed cache would also depend
+-- on unwrap() returning a stable Lua key for the same UObject across passes, which has never been
+-- measured. Not shipping that on reasoning; measure it first, then consider it for v0.3.
+local verdictByRow = {}
+
+-- The expensive half, run only for a row whose verdict is not yet known.
+local function deriveVerdict(t, row)
     local want = expectedIcon(row)
     if not want then return nil end             -- vanilla row: bails before touching a brush
 
@@ -185,6 +227,45 @@ local function slotState(t)
     pcall(function() name = tostr(res:GetFullName()) end)
     if not name then return nil end
     return name:find(want, 1, true) == nil
+end
+
+-- Caching is ASYMMETRIC, because the two possible errors are not equally bad.
+--
+-- The nil guard in deriveVerdict handles the claim race where a texture has not resolved at all.
+-- It does NOT handle the other pooling hazard this file already documents: a failed or pending
+-- resolve leaves the PREVIOUS brush in place, so a claimed slot can briefly read as a confident,
+-- non-nil, WRONG "unclaimed". Under the old derive-every-pass code that was self-healing — prune
+-- drives tiles bidirectionally, so the next pass restored the tile. Cache it and the self-heal
+-- never comes: a real skin stays hidden for the session. That is the one outcome rung 9 must
+-- never produce.
+--
+-- So: "claimed" (show) is cached on sight, because showing is the fail-open direction and a
+-- wrong show costs a stray placeholder tile. "unclaimed" (hide) must read the same way
+-- HIDE_CONFIRM times before it is trusted forever; a transient foreign brush will not survive
+-- that, and a genuinely empty slot converges in three passes and then costs nothing again.
+local HIDE_CONFIRM = 3
+local hideStreak = {}
+
+local function slotState(t)
+    local row
+    pcall(function() row = tostr(t.SkinRow.RowName) end)
+    if not row then return nil end
+
+    local cached = verdictByRow[row]
+    if cached ~= nil then return cached end       -- false is a real answer here, hence ~= nil
+
+    local st = deriveVerdict(t, row)
+    if st == false then
+        verdictByRow[row] = false                -- fail-open direction: trust it immediately
+        hideStreak[row] = nil
+    elseif st == true then
+        local streak = (hideStreak[row] or 0) + 1
+        hideStreak[row] = streak
+        if streak >= HIDE_CONFIRM then verdictByRow[row] = true end
+    else
+        hideStreak[row] = nil                    -- unreadable: the streak starts over
+    end
+    return st
 end
 
 -- Returns hidden, restored. MUST be called on the game thread.
