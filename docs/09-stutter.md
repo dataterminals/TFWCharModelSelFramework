@@ -12,6 +12,10 @@ the game thread. It logs **only when it changes a tile's visibility**, so a pass
 128 and changes nothing is completely silent. Three consecutive fixes optimised `FindAllOf` while
 this sat one line below the code they were editing.
 
+And there was never a second symptom to explain: **Innards is the hub**, where the four panels are
+resident, so "the Innards stutter" and "the menu stutter" are one thing. Only a genuine raid — the
+one place the pruner has no panels — was ever reported as fine.
+
 The cost of not measuring: v0.2.0, v0.2.1 and v0.2.2 were each shipped on reasoning, each
 genuinely made the poll cheaper, and none of them touched the actual cause. A single three-second
 `cmsfoff` in field test #1 would have got there four versions earlier. **Measure first** is the
@@ -217,12 +221,16 @@ single log line, which is exactly the designed silence. Rung 9 arithmetic came o
 `39` = 7 vanilla + 32 CMSF, `128` = 32 slots × 4 panels.
 
 **The stutter is NOT fixed, and the raid reports conflict.** Recorded verbatim, because the
-disagreement is itself the datum. Entering Innards: *"stutters still stuttering, that's for sure,
-in innards."* Mid-raid, a few minutes later: *"the raid feels fine, honestly."* After the session:
+disagreement is itself the datum. In Innards: *"stutters still stuttering, that's for sure, in
+innards."* In a raid, a few minutes later: *"the raid feels fine, honestly."* After the session:
 *"innards stutter still isn't fixed though."* The menu was reported stuttering throughout, first
 noticed after opening the escape menu. **No measurement was taken at any of those moments** — no
 `cmsfoff`, no `cmsfscan` — so all three are impressions, and the middle one was taken at face
 value in the first draft of this section. It should not have been.
+
+*(Field test #4: there was no contradiction. **Innards is the hub**, where the panels are
+resident — so "Innards" and "the menu" are the same condition, and only the genuine raid was
+pruner-free. This section wrote a conflict out of a place name nobody had checked.)*
 
 What matters is that the signatures no longer match the accused mechanism. In a raid v0.2.2
 converges to **one ~35 ms walk per 8 s**; in the frontend, with the cache warm, it does **none**.
@@ -271,6 +279,7 @@ Next session, attribution before anything else, and nothing else until it is don
    coincidence.
 2. **In Innards, once it is stuttering: `cmsfoff` again, same three seconds.** This is the one
    that has never been tried, and Innards is where the report is most consistent.
+   *(Moot: Innards is the hub, so step 1 already covers it — see field test #4.)*
 3. If the stutter survives `cmsfoff` in either place, **stop optimising CMSF** — pull the mod
    entirely for one raid and confirm against vanilla. A hitch that outlives a disabled mod and a
    removed mod is the game's, and this document ends there.
@@ -287,11 +296,31 @@ states, felt at the frontend, all three agreeing:
 | `cmsfoff` (10:07:09) | no | no | **gone** |
 | `cmsfunlock` (10:09:42) | yes | yes | **back** |
 | `cmsfnoprune` (10:09:52) | **yes** | no | **gone** |
+| `cmsfunlock` again (10:20:43) | **yes, re-armed to 1 Hz** | no | **gone** |
 
 The third row is the one that settles it. With the poll, the enforcement and the 1 Hz cadence all
 still running, disabling *only* the tile inspection removes the stutter. **The poll is exonerated
 and `prune()` is the cause.** Both directions were confirmed rather than one, so this is not a
 coincidence of timing.
+
+The fourth row is the replication that closes off the last escape route. `cmsfunlock` re-arms the
+backoff to `scanEvery = 1` explicitly, so the poll is walking at full cadence — and with pruning
+still off, it is quiet. The poll has now been switched **on twice**, and only the pass where
+pruning was also on produced a stutter. All four panels were resident for that run (`4 live`), so
+it is a frontend measurement, not a raid one.
+
+**The same two runs give the magnitude, by stopwatch rather than by feel.** Verbose mode logs once
+per panel, so the span across those four lines prices the per-panel work:
+
+| `cmsfunlock` | What ran | Span, 4 panels |
+|---|---|---|
+| 10:09:42 | `4 changed` + prune hiding 128 tiles | **~56 ms** (18 ms/panel) |
+| 10:20:43 | `0 changed`, pruning off | **~5 ms** (1.3 ms/panel) |
+
+Identical walk in both. The ~51 ms difference is `Init()` plus the pruner's tile work — an order
+of magnitude, in the same session, on the same rig. (The pair does not separate `Init()` from
+`prune`; the `cmsfnoprune` feel test is what pins it on `prune`, since that run left `Init()`
+reachable and still went quiet.)
 
 ### The mechanism, in the code
 
@@ -324,20 +353,30 @@ independent, larger cost that nobody had measured.
 `cmsfoff` — the game had re-filtered all four panels in that window. Enforcement genuinely cannot
 be one-shot; the flag really does get re-set.
 
-### Why three fixes all missed, and why the raid reports conflicted
+### Why the reports looked contradictory: **Innards is the hub, not a raid map**
 
-The menu and the raid had **different causes**, which is exactly why fixing either one never
-resolved "the stutter":
+Corrected on the spot by the tester, and it dissolves the whole apparent conflict. This document
+had spent two field tests treating "the Innards stutter" as a *raid* symptom needing a separate
+explanation from "the menu stutter". **Innards is the hub** — it is where the ready room lives, so
+the four panels are resident there exactly as they are at the main menu.
 
-- **In a raid** the four panels are destroyed, so `prune` has nothing to walk. The cost there was
-  the 1 Hz `FindAllOf` — held at full cadence by the asset template — and **v0.2.2 genuinely fixed
-  it.** That is the mid-session *"the raid feels fine, honestly."*
-- **At the menu** the panels exist, so `prune` runs on all four every second. No version has ever
-  touched it. That is every "still stuttering" report, in every field test.
+There was only ever **one cause**, and one rule that predicts every report ever filed:
 
-The Innards report still needs its own `cmsfoff`: v0.2.2 leaves at most one 35 ms walk per 8 s
-there, which does not match a continuous hitch, and Innards has vanilla traversal and
-shader-compilation stutter of its own. Frontend attribution does not transfer to a raid map.
+| Where | Panels resident? | `prune` runs? | Report |
+|---|---|---|---|
+| Main menu | yes | yes, 4 panels every second | "menu's definitely stuttering" |
+| **Hub (Innards)** | **yes** | **yes, 4 panels every second** | "still stuttering, in innards" |
+| An actual raid | no — destroyed | no, nothing to walk | *"the raid feels fine, honestly"* |
+
+So the mid-session "raid feels fine" was never in conflict with the Innards report: those are two
+different places, and the difference between them is precisely whether `prune` has panels to walk.
+Every "still stuttering" report came from a panel-resident location; the one "feels fine" came from
+the one location where the pruner is idle. v0.2.2's backoff fix is what made that raid quiet, and
+it is real — it just never touched the two places the tester actually noticed a problem.
+
+The lesson repeats the one above: **two field tests of analysis rested on an unchecked assumption
+about what a place name meant.** Nobody had asked. The cost was an invented second cause, a
+"different causes" section, and a recommendation to go run a raid test that was never needed.
 
 ### What v0.2.3 must do
 
@@ -390,14 +429,29 @@ game **re-filters all four panels** if enforcement is absent for ~2 minutes, so 
 be one-shot. And a single-panel rebuild (`hid 32`, one panel's worth) fires on menu *interaction*,
 confirming the prune's *logged* work is event-driven even though its *unlogged* work is per-pass.
 
-**Still assumed, or simply unmeasured:** whether the **Innards** report has the same cause — it
-cannot be `prune` (no panels exist in a raid) and v0.2.2 leaves only one 35 ms walk per 8 s there,
-so it needs its own `cmsfoff` before CMSF is blamed or cleared; Innards also has vanilla traversal
-and shader hitching. Whether NOTIFY fires on a **raid → hub return** is still unknown (no return
-has happened in two sessions) and v0.3's event design depends on it. The ~35 ms walk cost has not
-been re-measured since field test #2. And the in-place tile rebuild around an escape-menu open
-still has no identified trigger, though it now matters much less: with the verdict cached, a
-rebuild costs one re-derive instead of a permanent per-second tax.
+Also settled in field test #4, both of them things this document had listed as open:
+
+- **Innards is the hub**, so the "Innards stutter" and the "menu stutter" are one symptom in two
+  panel-resident places, not two symptoms needing two causes. No separate raid test is required.
+- **NOTIFY fires on a frontend rebuild.** After the panels were destroyed (`apply: 1 found,
+  0 live` at 10:22:01) they were reconstructed at 10:22:42 with entirely new object IDs, and
+  NOTIFY #11–14 fired for all four. **v0.3's event path covers re-entry, not just first
+  construction** — the last thing blocking a fully event-driven design.
+- **The walk, re-measured** over 20 reps rather than field test #2's three: **42.7 ms** with the
+  panels resident (5 found), **31.8 ms** with only the template (1 found). Both *higher* than the
+  35 ms on record. It is worth noting the poll is genuinely expensive per walk — it simply is not
+  what the player was feeling, because the v0.2.2 cache means the frontend almost never walks.
+- **The exact class path for v0.3 registration**, which this repo had never recorded:
+  `WidgetBlueprintGeneratedClass /Game/FW/UI/MainMenu/UMG/Panels/WBP_SkinSelection.WBP_SkinSelection_C`
+
+**Still assumed, or simply unmeasured:** v0.2.3 itself — written, syntax-checked and staged, but
+never run in-game; the four-state table is its regression test. The in-place tile rebuild around
+an escape-menu open still has no identified trigger, though it matters much less now: with the
+verdict cached a rebuild costs one re-derive rather than a permanent per-second tax. And a
+`Error: A custom console command handle must return true or false` line appears in the log roughly
+0.7 s before each `cmsfscan` result — **not explained**: both CMSFTime handlers do return `true`
+(lines 67 and 157), so it is either another loaded mod or a UE4SS quirk. Left alone deliberately
+rather than "fixed" on a guess, which is the mistake this whole document is about.
 
 The original sizing table, kept for the record — the third row is what fired (35 ms), which is
 why v0.2.2 caches instead of merely rationing:
