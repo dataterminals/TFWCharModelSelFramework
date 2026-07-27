@@ -43,13 +43,13 @@
 .EXAMPLE
     .\tools\package-release.ps1
 .EXAMPLE
-    .\tools\package-release.ps1 -Version 0.2.1 -Retoc "D:\tools\retoc\retoc.exe"
+    .\tools\package-release.ps1 -Version 0.2.3 -Retoc "D:\tools\retoc\retoc.exe"
 #>
 [CmdletBinding()]
 param(
     [string]$Retoc,
     [string]$Framework,
-    [string]$Version = "0.2.2",
+    [string]$Version = "0.2.3",
     [string]$OutDir
 )
 

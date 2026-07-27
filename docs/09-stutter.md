@@ -594,11 +594,19 @@ An event path that silently never fires is v0.1's failure mode exactly.
 
 ## Housekeeping
 
-**The built zips in `dist/release` are stale and must not be shipped.** `CMSF-v0.2.1.zip` and
-`CMSF-author-v0.2.1.zip` were both built 2026-07-24, and the `CMSFUnlock` Lua inside them carries
-**no version banner at all** — that is pre-v0.2.1 code wearing a v0.2.1 filename, the same trap
-the v0.2.0 zip fell into. Rebuild before any release; `tools/package-release.ps1` now defaults to
-`-Version 0.2.2`. Note also that **git tags stop at v0.2.0** — neither 0.2.1 nor 0.2.2 is tagged.
+**v0.2.3 is built, verified and tagged** (2026-07-27). Both bundles were rebuilt after field test
+#5 and the player zip was checked by extracting its Lua: version banner `0.2.3`, `cmsfprune`
+present, `verdictByRow` and `HIDE_CONFIRM` present. `tools/package-release.ps1` now defaults to
+`-Version 0.2.3`.
+
+*The trap this note used to describe, kept because it will happen again:* the v0.2.1-named zips
+sitting here for three days contained Lua with **no version banner at all** — pre-v0.2.1 code
+wearing a v0.2.1 filename, exactly as the v0.2.0 zip had. Deleted 2026-07-27. **Always extract the
+Lua and read the banner before shipping a zip**; the filename is not evidence. Tags jumped v0.2.0 →
+v0.2.3 because 0.2.1 and 0.2.2 were never fit to ship.
+
+**Keep `CMSF-v0.2.2.zip`.** It is the last artifact containing the *un-memoised* `slotState`, which
+is exactly what the outstanding causation test needs (see field test #5). Do not tidy it away.
 
 Test-rig gotcha, cost a session: the MO2 mod folder had **stale v0.2.0-era Lua** (dated 2026-07-21)
 and **no `CMSFTime` at all**, so `cmsfscan`/`cmsftime`/the v0.3 probe were simply absent. Field

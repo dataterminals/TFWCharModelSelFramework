@@ -129,7 +129,40 @@ and Archengius) and [UE4SS](https://github.com/UE4SS-RE/RE-UE4SS).
 
 ## C. Announcement / release notes
 
-### v0.2.2 — DRAFT, and do not post it yet
+### v0.2.3 — ready to post (field-tested 2026-07-27)
+
+Verified in-game: four states (pruning on/off × poll on/off) with the tiles resident, plus a
+cross-version comparison against v0.2.2 on the same rig 25 minutes apart. **Not** a frametime
+graph — an A/B by feel plus per-panel timings read off the log. So claim "fixed" and skip any
+before/after numbers you cannot show a chart for. Full evidence and its limits: `docs/09-stutter.md`.
+
+> **CMSF v0.2.3 — the skin menu stutter is fixed**
+>
+> If the hub or the skin menu had a once-a-second hitch with CMSF installed, this is the one.
+>
+> CMSFUnlock hides the placeholder tiles for CMSF slots that no skin has claimed. To decide which
+> those are, it looked up each tile's icon and compared it against the path that slot's texture
+> would live at — and it redid that for every tile on all four ready-room panels, every second.
+> On a full 32-slot setup that is 128 tiles a second, on the thread that draws frames.
+>
+> A slot's answer cannot change while the game is running: the texture either shipped in a
+> mounted pak or it did not. So v0.2.3 works each one out once and remembers it. Steady state is
+> now a table lookup instead of 128 asset-path comparisons.
+>
+> Two earlier fixes went after a different suspect — the scan that locates the menu in the first
+> place. Those changes were real and are still in, but they were not what anyone was feeling.
+>
+> No behaviour change: the selector still lists every skin, unclaimed slots still hide. New
+> `cmsfprune` / `cmsfnoprune` console commands toggle the tile hiding at runtime, if you want to
+> check the difference yourself.
+
+---
+
+### v0.2.2 — DRAFT, never posted, superseded by v0.2.3
+
+*Kept for the record. It was blocked on verification, and verification is what showed its premise
+was wrong: the ~35 ms scan it describes was real but was not the stutter anyone was feeling. Do
+not post this.*
 
 Blocked on in-game verification. v0.2.0's stutter fix went out on reasoning alone and a player
 reported the hitch was better but still there; v0.2.1's went out the same way and lasted seven
