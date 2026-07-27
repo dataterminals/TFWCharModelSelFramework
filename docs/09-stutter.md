@@ -1,6 +1,10 @@
 # The skin-menu stutter — what is known, and what is still guessed
 
-**SOLVED, field test #4 (2026-07-27). The cause was never the poll. It is `prune()`.**
+**LEADING SUSPECT as of field test #4 (2026-07-27): not the poll — `prune()`.** Downgraded from
+"solved" within the hour, on purpose: see *How thin this actually is* in that section. The
+diagnosis rests on a single ten-second window, because `cmsfnoprune` turned out to be a one-way
+switch and every later comparison was prune-off against prune-off. `cmsfprune` now exists so
+field test #5 can run the A/B properly.
 
 Read that section first; most of what follows it was written while chasing the wrong object and
 is kept only because the wrong turns are instructive.
@@ -308,6 +312,27 @@ backoff to `scanEvery = 1` explicitly, so the poll is walking at full cadence �
 still off, it is quiet. The poll has now been switched **on twice**, and only the pass where
 pruning was also on produced a stutter. All four panels were resident for that run (`4 live`), so
 it is a frontend measurement, not a raid one.
+
+### How thin this actually is — read before trusting the table
+
+**`cmsfnoprune` was a one-way switch.** Nothing in the file set `pruning` back to true, and
+`cmsfunlock` re-arms only the *poll*. So from 10:09:52 onward, **every** state in that session had
+pruning off: the re-armed poll, the raid, the return to the hub, all of it. The tester cycled
+"off / rearmed / noprune" in good faith and correctly reported *no stutter anywhere* — because
+after the first `cmsfnoprune` there was no longer a prune-ON state to compare against, and nothing
+in the log or the banner said so.
+
+Which means the entire prune diagnosis rests on **one ten-second window** — 10:09:42 to 10:09:52,
+the only interval in the session with pruning on and the poll running. The three quiet states are
+mutually consistent and all point the same way, but they are three samples of the *same* condition.
+One narrow positive is not a confirmed cause; it is a strong lead.
+
+`cmsfprune` now exists as the counterpart, and it clears the verdict caches so each toggle-on is a
+cold measurement. **The real field test #5 is the A/B this session could not run:** at the hub,
+`cmsfprune` → wait ~5 s → judge → `cmsfnoprune` → judge, repeated a few times, poll untouched
+throughout. If prune-on stutters and prune-off does not, across several cycles, the diagnosis is
+earned. If neither stutters, then v0.2.2 fixed the thing all along and field test #4's headline is
+wrong.
 
 **The same two runs give the magnitude, by stopwatch rather than by feel.** Verbose mode logs once
 per panel, so the span across those four lines prices the per-panel work:

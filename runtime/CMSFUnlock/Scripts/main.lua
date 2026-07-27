@@ -539,5 +539,24 @@ RegisterConsoleCommandHandler("cmsfnoprune", function()
     return true
 end)
 
+-- THE MISSING COUNTERPART, and it cost a session's worth of confusion (field test #4).
+-- `cmsfnoprune` was one-way: nothing in this file ever set `pruning` back to true, and
+-- `cmsfunlock` re-arms only the POLL. So once a tester ran cmsfnoprune, pruning stayed off for
+-- the rest of the process — through every later cmsfunlock, through a raid, through everything.
+-- A tester cycling "off / rearmed / noprune" in good faith was comparing three prune-OFF states
+-- against nothing, and reasonably reported no difference anywhere. The single prune-ON sample in
+-- that whole session was ten seconds wide, which is far too thin to hang a diagnosis on.
+--
+-- The caches are cleared on the way in so each toggle-on is a COLD measurement rather than a warm
+-- one — otherwise a re-test silently benefits from verdicts derived before the switch, which is
+-- exactly the confound v0.2.3 is supposed to be measured against.
+RegisterConsoleCommandHandler("cmsfprune", function()
+    pruning = true
+    verdictByRow, hideStreak = {}, {}
+    log("pruning ON, verdict cache cleared — reopen the skin menu, give it ~5 s, then judge")
+    return true
+end)
+
 log("v" .. VERSION .. " loaded — selector will list every skin, and unclaimed CMSF slots are hidden.")
-log("  `cmsfunlock` force + report   `cmsfoff` disable   `cmsfnoprune` show unclaimed slots")
+log("  `cmsfunlock` force + report   `cmsfoff` disable")
+log("  `cmsfnoprune` / `cmsfprune` toggle tile pruning — the A/B for the stutter")
