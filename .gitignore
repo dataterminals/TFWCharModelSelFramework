@@ -28,5 +28,9 @@ __pycache__/
 dist/cmsf-tool/
 # v0.2 author tool (dotnet publish tools/cmsf-author -c Release -o dist/cmsf-author)
 dist/cmsf-author/
-# release bundles (rebuild with: tools/package-release.ps1) — attach to a release, never commit
-dist/release/
+# dist releases: the distributable mod zips (CMSF-v*.zip, ~180K — our own pak + Lua) are
+# TRACKED so a second dev machine gets them on `git pull`. The ~36M author-tool bundle
+# (CMSF-author-*.zip = cmsf-author.exe + retoc.exe) stays local — rebuild it with:
+#   dotnet publish tools/cmsf-author -c Release   (then tools/package-release.ps1)
+dist/release/*
+!dist/release/CMSF-v*.zip
