@@ -109,6 +109,7 @@ tools/
   cmsf_build.py          the v0.1 generator — extract, patch, repack, verify
   cmsf/                  the v0.1 end-user exe (C#)
   package-release.ps1    builds the author bundle; REFUSES to ship Oodle or a usmap
+  test_cmsfunlock.lua    stubs UE4SS and drives CMSFUnlock's poll body: `lua tools/test_cmsfunlock.lua`
   skinpatch/             UAssetAPI: DataTable rows (add / addst) + roster (bpadd / bpset)
   stgen/  mshgen/        string-table and package cloning — absorbed into cmsf-author
   stprobe/  mshprobe/    historical probe harnesses. mshprobe does NOT rewrite identity

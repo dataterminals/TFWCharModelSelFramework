@@ -106,7 +106,44 @@
 --
 -- The fix below caches the VERDICT by row name. See the note over verdictByRow for what is
 -- deliberately not cached, and why a tile-handle cache is NOT used (pooling).
-local VERSION = "0.2.3"
+--
+-- v0.2.4 — THE MENU CAN BE BLANK FOR A CHARACTER, AND enforceOne COULD NOT FIX IT.
+-- Field report (Nexus, 2026-07-30): "the skins menu only works for mask man ... it shows the
+-- default skins and anniversary skin, but the menu is missing for the other characters", with
+-- no other mods installed. Two things in that sentence do the work. Default skins ARE listed,
+-- and vanilla filtering lists owned LockedSkinChoices ONLY — so the flag is cleared and this
+-- file is running. And the one character that works is the one the player owns an entitlement
+-- for; the other five have nothing in GetUnlockedSkins, so their vanilla list is 0 entries.
+--
+-- The defect: Init() — the only call that repopulates a panel — was written INSIDE the branch
+-- that clears SelectLockedSkinsOnly, so it fired at most once per panel, and usually not even
+-- that. apply() enforces the WBP_PlayerStatusWidget TEMPLATE as well, and a cleared flag on the
+-- template is inherited by later instances, so every panel constructed after the first walk
+-- starts at false, takes the `locked == false` path, and is never Init()ed by this mod at all.
+-- From that moment CMSF only watches: whatever populates the panel is the game's own path, and
+-- if that path declines to run for a character with no entitled skins, the menu stays empty and
+-- nothing here notices. A rig that owns DLC across the roster never sees it, which is how
+-- "validated across all six characters" passed.
+--
+-- So Init() is decoupled from the flag write, and a LIVE panel whose SkinOptions holds no
+-- children at all gets one — on the same doubling backoff shape as scanEvery, because a panel
+-- that is legitimately empty must not buy a rebuild every second forever.
+--
+-- And a second guard that does not depend on the diagnosis above being right: a panel with
+-- children where NOTHING is visible is never a correct state — every character has base skins,
+-- and with the filter cleared they are all selectable. So if pruning leaves a populated panel
+-- with zero visible tiles, the non-CMSF tiles are restored. That also covers the other
+-- candidate cause — a collapsed visibility inherited through the widget pool onto a vanilla row
+-- — without paying its risk: driving vanilla tiles unconditionally would un-park spare tiles if
+-- the game keeps them collapsed in the box, whereas this only ever fires in a state that is
+-- already blank, where a stray tile plainly beats an empty menu.
+--
+-- UNVERIFIED IN-GAME, and the reporter no longer has the log that would have separated the two
+-- causes. House rule: say so until it is loaded. If a menu is still blank after this, the number
+-- to get is `cmsfunlock`'s "selector lists N skin(s)" at the broken character — 0 means the
+-- panel never populated and the forced Init did not take; 39 means it populated and the tiles
+-- are hidden.
+local VERSION = "0.2.4"
 
 local WIDGET = "WBP_SkinSelection_C"
 local POLL_MS = 1000         -- the tick; the object-array scan runs on a backoff MULTIPLE of it
@@ -115,6 +152,7 @@ local IDLE_MAX_TICKS = 8     -- ceiling on that backoff, so an idle raid walks o
 local enabled = true
 local quiet = false          -- set once the first successful apply has been reported
 local pruning = true         -- rung 9; `cmsfnoprune` to disable
+local restorePasses = 0      -- the bounded restoring sweep `cmsfnoprune` owes; see that handler
 
 local function log(s) print("[CMSFUnlock] " .. tostring(s) .. "\n") end
 
@@ -179,10 +217,17 @@ local function expectedIcon(row)
     return string.format("/Game/CMSF/%s/%s/T_CMSF_%s_%s", char, slot, char, slot)
 end
 
--- Tri-state, and the third state is load-bearing:
+-- Four states, and the last two are load-bearing:
 --   true   positively an UNCLAIMED CMSF slot   -> hide
 --   false  positively a CLAIMED CMSF slot      -> show
---   nil    not a CMSF slot, or cannot tell yet -> leave alone
+--   OTHER  positively NOT a CMSF slot at all   -> leave alone (a vanilla row, or a v0.1 one)
+--   nil    cannot tell YET                     -> leave alone
+--
+-- v0.2.4 split OTHER out of nil. Both mean "leave the tile alone" in the normal path, so this
+-- changes no visibility on its own — but only OTHER is a POSITIVE reading, and it is the one
+-- the blank-menu guard in prune() needs: it says this tile is currently showing a skin the game
+-- itself put in the list, which is what makes restoring it safe. nil remains the retry state,
+-- and is still never cached.
 --
 -- `nil` on an unresolved icon is the whole fix for the claim race. An author's texture is
 -- not necessarily resolved on the menu's first population: measured 2026-07-21, the first
@@ -212,10 +257,13 @@ end
 -- measured. Not shipping that on reasoning; measure it first, then consider it for v0.3.
 local verdictByRow = {}
 
+-- Distinct from nil so a positive "this is not one of ours" can be told apart from "ask again".
+local OTHER = "other"
+
 -- The expensive half, run only for a row whose verdict is not yet known.
 local function deriveVerdict(t, row)
     local want = expectedIcon(row)
-    if not want then return nil end             -- vanilla row: bails before touching a brush
+    if not want then return OTHER end           -- vanilla row: bails before touching a brush
 
     local img, brush, res, name
     pcall(function() img = unwrap(t.SkinIcon) end)
@@ -255,7 +303,10 @@ local function slotState(t)
     if cached ~= nil then return cached end       -- false is a real answer here, hence ~= nil
 
     local st = deriveVerdict(t, row)
-    if st == false then
+    if st == OTHER then
+        verdictByRow[row] = OTHER                -- a row name cannot change namespace mid-session
+        hideStreak[row] = nil
+    elseif st == false then
         verdictByRow[row] = false                -- fail-open direction: trust it immediately
         hideStreak[row] = nil
     elseif st == true then
@@ -268,33 +319,80 @@ local function slotState(t)
     return st
 end
 
+-- Logged at most once a process: the guard re-applying every pass would mean the write is not
+-- taking, and a line per second in a player's log is not how that should be reported.
+local blankLogged = false
+
 -- Returns hidden, restored. MUST be called on the game thread.
-local function prune(w)
-    if not pruning then return 0, 0 end
-    local kids
-    if not pcall(function() kids = w.SkinOptions:GetAllChildren() end) then return 0, 0 end
+--
+-- v0.2.4 takes the child list the CALLER already fetched. enforceOne needs the count anyway for
+-- the empty-panel check, and reportCountForWidget was reading it a third time; one read per
+-- panel per pass now serves all three.
+local function prune(kids)
     if not kids then return 0, 0 end
+    -- The bounded restoring sweep `cmsfnoprune` owes — see that handler. Outside it, pruning
+    -- off still costs nothing at all, which is what makes the command a clean stutter A/B
+    -- (field test #4). A permanent inspection here would destroy the only measurement that has
+    -- ever worked on this file.
+    local sweeping = (not pruning) and restorePasses > 0
+    if (not pruning) and (not sweeping) then return 0, 0 end
+
     local n, restored = 0, 0
+    local visible, foreign = 0, {}
     for _, raw in pairs(kids) do
         local t = unwrap(raw)
         local ok = false
         pcall(function() ok = t:IsValid() end)
         if ok then
             local st = slotState(t)
-            if st ~= nil then
-                -- BIDIRECTIONAL on purpose. An earlier version only ever collapsed, so a
-                -- tile misread once — during the claim race above — stayed hidden for the
-                -- rest of the session. Driving the tile to its correct state every pass
-                -- makes a transient misread self-correct on the next poll.
-                local want = st and VIS_COLLAPSED or VIS_DEFAULT
-                local vis
-                pcall(function() vis = t.Visibility end)
-                if vis ~= want and pcall(function() t:SetVisibility(want) end) then
-                    if st then n = n + 1 else restored = restored + 1 end
-                end
+            -- BIDIRECTIONAL on purpose. An earlier version only ever collapsed, so a
+            -- tile misread once — during the claim race above — stayed hidden for the
+            -- rest of the session. Driving the tile to its correct state every pass
+            -- makes a transient misread self-correct on the next poll.
+            --
+            -- OTHER and nil both fall through with `want` unset, i.e. untouched: this file
+            -- does not decide the visibility of a tile the game owns, outside the guard below.
+            local want
+            if sweeping then
+                if st == true or st == false then want = VIS_DEFAULT end
+            elseif st == true then
+                want = VIS_COLLAPSED
+            elseif st == false then
+                want = VIS_DEFAULT
             end
+
+            local vis
+            pcall(function() vis = t.Visibility end)
+            if want ~= nil and vis ~= want and pcall(function() t:SetVisibility(want) end) then
+                vis = want
+                if want == VIS_COLLAPSED then n = n + 1 else restored = restored + 1 end
+            end
+
+            -- Both tallies feed the blank-menu guard, and an UNREADABLE visibility deliberately
+            -- does not count as visible: the guard should fire when this file cannot prove the
+            -- player has something to look at.
+            if st == OTHER then foreign[#foreign + 1] = t end
+            if vis ~= nil and vis ~= VIS_COLLAPSED then visible = visible + 1 end
         end
     end
+
+    -- THE BLANK-MENU GUARD. A panel holding tiles with not one of them visible is never a
+    -- correct state: every character has base skins in its roster, and with the filter cleared
+    -- they are all selectable. Whatever produced it — a collapsed visibility inherited through
+    -- the widget pool onto a vanilla row, or something not yet named — showing the tiles the
+    -- GAME put in the list beats showing the player an empty menu. Only OTHER tiles are
+    -- restored: unclaimed placeholders stay hidden, which is the whole point of rung 9.
+    if visible == 0 and #foreign > 0 then
+        local shown = 0
+        for _, t in ipairs(foreign) do
+            if pcall(function() t:SetVisibility(VIS_DEFAULT) end) then shown = shown + 1 end
+        end
+        if not blankLogged then
+            blankLogged = true
+            log(string.format("blank menu guarded: restored %d game skin tile(s)", shown))
+        end
+    end
+
     return n, restored
 end
 
@@ -303,16 +401,11 @@ end
 -- manual command at the right moment does not work in practice; reporting on change means
 -- opening the menu is the whole interaction and the log records the number by itself.
 --
--- Takes a selector the caller ALREADY has in hand. This used to re-run FindAllOf (a second
+-- Takes the count the caller ALREADY has in hand. This used to re-run FindAllOf (a second
 -- full object-array scan every poll); folded into apply()'s existing walk so the poll scans
--- once, not twice. MUST be called on the game thread.
+-- once, not twice, and as of v0.2.4 it does not re-read SkinOptions either.
 local lastCount = -1
-local function reportCountForWidget(w)
-    local n = -1
-    pcall(function()
-        local kids = w.SkinOptions:GetAllChildren()
-        n = kids and #kids or -1
-    end)
+local function reportCount(n)
     -- Only populated selectors are interesting, and only when the number moves.
     if n > 0 and n ~= lastCount then
         lastCount = n
@@ -320,9 +413,22 @@ local function reportCountForWidget(w)
     end
 end
 
--- The per-widget enforcement body, shared by the walk path and the cached path.
--- MUST be called on the game thread. Returns appliedDelta, prunedDelta, restoredDelta.
-local function enforceOne(w, verbose)
+-- The one read of SkinOptions per panel per pass. Returns nil when the read FAILED, which is
+-- emphatically not the same as an empty panel — the forced repopulate below keys on "no
+-- children", and must never fire because a property was momentarily unreadable.
+-- MUST be called on the game thread.
+local function children(w)
+    local kids
+    if not pcall(function() kids = w.SkinOptions:GetAllChildren() end) then return nil end
+    return kids
+end
+
+-- The per-widget enforcement body, shared by the walk path and the cached path. MUST be called
+-- on the game thread. Returns appliedDelta, prunedDelta, restoredDelta, stillEmpty.
+--
+-- `live` distinguishes a real panel from the asset template; `mayForce` is the caller's backoff
+-- verdict for this pass. Both exist for the forced repopulate below and nothing else.
+local function enforceOne(w, verbose, live, mayForce)
     local applied = 0
     local locked, readOk = nil, false
     readOk = pcall(function() locked = w.SelectLockedSkinsOnly end)
@@ -331,16 +437,36 @@ local function enforceOne(w, verbose)
     -- permissive here is harmless (clearing an already-clear flag is a no-op) and
     -- avoids the failure mode where an unreadable property silently disables the
     -- whole mod, which is close to what v0.1 did.
+    local doInit = false
     if (not readOk) or locked ~= false then
         pcall(function() w.SelectLockedSkinsOnly = false end)
+        doInit, applied = true, 1
+    end
+
+    -- v0.2.4 — THE FORCED REPOPULATE, and the reason Init() no longer lives in the branch
+    -- above. A live panel holding no tiles AT ALL has not been populated, and the flag being
+    -- already false — inherited from the template this file cleared earlier — means the branch
+    -- above will never run for it again. Without this, the mod watches such a panel stay empty
+    -- for the rest of the session.
+    --
+    -- Gated three ways, because Init() is the expensive call in this file: only for a LIVE
+    -- panel (never rebuild the asset template), only on a positively-empty read (`children`
+    -- returns nil, not 0, when the read failed), and only when the caller's backoff says so, so
+    -- a panel that is legitimately empty settles at one Init() per FORCE_MAX_TICKS seconds.
+    local kids = children(w)
+    local n = kids and #kids or -1
+    if live and n == 0 and mayForce then doInit = true end
+
+    if doInit then
         pcall(function() w:Init() end)
-        applied = 1
+        kids = children(w)
+        n = kids and #kids or -1
     end
 
     -- After Init(), which rebuilds the tiles and so undoes any earlier prune.
     -- Runs on every pass, not only when the filter changed: reopening the menu
     -- repopulates the WrapBox without necessarily re-setting the flag.
-    local h, r = prune(w)
+    local h, r = prune(kids)
 
     -- Always report the list size when asked, not only when something changed.
     -- The poll usually gets there first, so the earlier "only on change" version
@@ -348,21 +474,16 @@ local function enforceOne(w, verbose)
     -- screenshot. This number is the actual verification: vanilla Scav Girl
     -- unfiltered is 7, so anything above that is an appended CMSF skin.
     if verbose then
-        local n = -1
-        pcall(function()
-            local kids = w.SkinOptions:GetAllChildren()
-            n = kids and #kids or -1
-        end)
         if n >= 0 then
             log(string.format("selector lists %d skin(s)%s", n,
                 n > 0 and "" or "  (open the skin menu, then re-run)"))
         end
     else
-        -- Poll path: report the count on change, reusing this same widget rather
-        -- than a fresh FindAllOf.
-        reportCountForWidget(w)
+        -- Poll path: report the count on change.
+        reportCount(n)
     end
-    return applied, h, r
+    -- Reported AFTER the forced Init, so the backoff doubles only when forcing did not help.
+    return applied, h, r, (live and n == 0) and 1 or 0
 end
 
 -- ---------------------------------------------------------------------------------------
@@ -391,35 +512,63 @@ end
 -- the frontend run walk-free at steady state.
 local liveCache = {}
 
--- Returns applied, seen, pruned, restored, live. MUST be called on the game thread.
+-- Returns applied, seen, pruned, restored, live, stillEmpty. MUST be called on the game thread.
 -- This is the WALK path: one full FindAllOf (~35 ms on the dev rig — field test #2), then
 -- enforcement on everything found, and the live cache is rebuilt as a side effect. The
 -- template IS still enforced here (a cleared flag on the template is inherited by future
--- instances, which is welcome) — but only once per walk, no longer once per second.
-local function apply(verbose)
+-- instances, which is welcome — and is also, per the v0.2.4 stratum, exactly why those future
+-- instances never used to get an Init()) — but only once per walk, not once per second.
+local function apply(verbose, mayForce)
     liveCache = {}
     local found = FindAllOf(WIDGET)
     if not found then
         if verbose then log("no skin selector in memory — open the skin menu first") end
-        return 0, 0, 0, 0, 0
+        return 0, 0, 0, 0, 0, 0
     end
 
-    local applied, seen, pruned, restored, live = 0, 0, 0, 0, 0
+    local applied, seen, pruned, restored, live, empty = 0, 0, 0, 0, 0, 0
     for _, w in pairs(found) do
         if w:IsValid() then
             seen = seen + 1
-            if isLiveInstance(w) then
+            local isLive = isLiveInstance(w)
+            if isLive then
                 live = live + 1
                 liveCache[#liveCache + 1] = w
             end
-            local a, h, r = enforceOne(w, verbose)
-            applied, pruned, restored = applied + a, pruned + h, restored + r
+            local a, h, r, e = enforceOne(w, verbose, isLive, mayForce)
+            applied, pruned, restored, empty = applied + a, pruned + h, restored + r, empty + e
         end
     end
     if verbose and seen > 0 and applied == 0 then
         log(string.format("%d selector(s) were already unfiltered", seen))
     end
-    return applied, seen, pruned, restored, live
+    return applied, seen, pruned, restored, live, empty
+end
+
+-- Backoff for the forced repopulate, deliberately the same shape as scanEvery below: an empty
+-- live panel is retried on the next pass, and each attempt that leaves it still empty doubles
+-- the wait. A panel that never populates therefore costs one Init() per 16 s rather than one
+-- per second, while a menu that goes blank mid-session is rebuilt within one.
+--
+-- Any pass with nothing empty re-arms it fully. That matters more than the ceiling does: the
+-- reported symptom is per-character, so the state this has to catch is a panel that was fine a
+-- moment ago and is blank now, after the player switched to a character they own nothing for.
+local FORCE_MAX_TICKS = 16
+local forceEvery, forceWaited = 1, 0
+
+local function forceGate()
+    forceWaited = forceWaited + 1
+    if forceWaited < forceEvery then return false end
+    forceWaited = 0
+    return true
+end
+
+local function noteEmpty(attempted, stillEmpty)
+    if stillEmpty == 0 then
+        forceEvery, forceWaited = 1, 0
+    elseif attempted then
+        forceEvery = math.min(forceEvery * 2, FORCE_MAX_TICKS)
+    end
 end
 
 -- One poll pass. MUST be called on the game thread. The cached path costs a handful of
@@ -429,6 +578,7 @@ end
 -- field test #2), so the cache lives until a raid load tears the frontend down. Returns the
 -- aggregates the loop logs, plus live for the backoff decision.
 local function pollOnce()
+    local mayForce = forceGate()
     if #liveCache > 0 then
         local allValid = true
         for _, w in ipairs(liveCache) do
@@ -440,11 +590,12 @@ local function pollOnce()
             end
         end
         if allValid then
-            local applied, pruned, restored = 0, 0, 0
+            local applied, pruned, restored, empty = 0, 0, 0, 0
             for _, w in ipairs(liveCache) do
-                local a, h, r = enforceOne(w, false)
-                applied, pruned, restored = applied + a, pruned + h, restored + r
+                local a, h, r, e = enforceOne(w, false, true, mayForce)
+                applied, pruned, restored, empty = applied + a, pruned + h, restored + r, empty + e
             end
+            noteEmpty(mayForce, empty)
             return applied, pruned, restored, #liveCache
         end
         -- Something in the cache died — a map change. Fall through to a walk, which either
@@ -452,7 +603,8 @@ local function pollOnce()
         -- backoff takes it from there.
         liveCache = {}
     end
-    local applied, _, pruned, restored, live = apply(false)
+    local applied, _, pruned, restored, live, empty = apply(false, mayForce)
+    noteEmpty(mayForce, empty)
     return applied, pruned, restored, live
 end
 
@@ -476,6 +628,9 @@ LoopAsync(POLL_MS, function()
     -- a single early or late scan.
     ExecuteInGameThread(function()
         local applied, pruned, restored, live = pollOnce()
+        -- Decremented HERE, not inside prune(): one pass covers every panel, so a sweep is
+        -- consumed per pass rather than per widget.
+        if restorePasses > 0 then restorePasses = restorePasses - 1 end
 
         if live > 0 then
             -- Live panels on hand: enforce at full cadence. prune() in particular has to
@@ -512,12 +667,16 @@ end)
 -- this a bare toggle, which looked broken because it produced no effect on its own.
 RegisterConsoleCommandHandler("cmsfunlock", function()
     enabled = true
-    -- Re-arm the poll at full speed. Running this by hand means someone is standing at the
-    -- menu right now, and leaving the backoff wherever an idle raid parked it would make the
+    -- Re-arm both backoffs at full speed. Running this by hand means someone is standing at the
+    -- menu right now, and leaving either one wherever an idle raid parked it would make the
     -- next automatic pass up to IDLE_MAX_TICKS late.
     scanEvery, ticksWaited = 1, 0
+    forceEvery, forceWaited = 1, 0
     ExecuteInGameThread(function()
-        local applied, seen, pruned, restored, live = apply(true)
+        -- mayForce is unconditionally true here: someone standing at a blank menu asking for
+        -- this is the one moment a repopulate should never be rationed.
+        local applied, seen, pruned, restored, live = apply(true, true)
+        if restorePasses > 0 then restorePasses = restorePasses - 1 end
         log(string.format("apply: %d changed / %d selector(s) found (%d live), %d slot(s) hidden",
             applied, seen, live, pruned))
         if restored > 0 then log(string.format("  restored %d claimed tile(s)", restored)) end
@@ -532,10 +691,21 @@ RegisterConsoleCommandHandler("cmsfoff", function()
 end)
 
 -- An escape hatch that does not require reinstalling: if pruning ever hides something it
--- should not, this brings it back on the next menu open without touching the unlock.
+-- should not, this brings it back without touching the unlock.
+--
+-- v0.2.4 — IT NOW ACTUALLY RESTORES. Until this version the handler only stopped FUTURE
+-- pruning: prune() returned at its first line, so every tile already collapsed stayed collapsed
+-- until the game happened to rebuild the panel. The README hands this command to a player whose
+-- skin is missing, which is precisely the case where something is already hidden — so the one
+-- documented remedy did nothing for the one symptom it was written for.
+--
+-- The sweep is BOUNDED at a couple of passes rather than made permanent, because prune() being
+-- free while pruning is off is what makes `cmsfnoprune` / `cmsfprune` a clean A/B, and that A/B
+-- is the only measurement that has ever settled anything about this file (field test #4).
 RegisterConsoleCommandHandler("cmsfnoprune", function()
     pruning = false
-    log("pruning OFF — unclaimed CMSF slots will show. Reopen the skin menu.")
+    restorePasses = 2
+    log("pruning OFF — restoring every CMSF slot, claimed or not. Give it a second.")
     return true
 end)
 
@@ -552,6 +722,7 @@ end)
 -- exactly the confound v0.2.3 is supposed to be measured against.
 RegisterConsoleCommandHandler("cmsfprune", function()
     pruning = true
+    restorePasses = 0
     verdictByRow, hideStreak = {}, {}
     log("pruning ON, verdict cache cleared — reopen the skin menu, give it ~5 s, then judge")
     return true
