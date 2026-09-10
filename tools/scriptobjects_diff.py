@@ -122,13 +122,26 @@ def parse_names(path):
         die("%s string blob consumed %d bytes, header declared %d -- parse is wrong"
                  % (path, s - off, nstr))
 
-    # Invariant 2: what is left is exactly the entry array.
+    # Invariant 2: what is left is the entry array, plus at most a small container footer.
+    #
+    # Both inputs are accepted on purpose:
+    #   * scriptobjects.bin, as retoc drops it at the root of a to-legacy output -- exact fit.
+    #   * global.ucas straight out of the game's Paks folder, or archived in a
+    #     tfw-update-ops baseline under global/ -- the ScriptObjects chunk starts at offset 0
+    #     and is followed by a 15-byte container footer. Measured on 25071553:
+    #     global.ucas 3,017,568 = scriptobjects.bin 3,017,553 + 15.
+    # Reading global.ucas directly matters because that is what a baseline can archive without
+    # retoc, the AES key or the .NET decoder -- see capture_baseline.ps1 step [3/7].
+    FOOTER_SLACK = 16
     remainder = len(b) - s
     if remainder >= 4:
         nentries, = struct.unpack_from("<I", b, s)
-        if remainder != 4 + nentries * 32:
-            die("%s trailing %d bytes != 4 + %d*32 -- FScriptObjectEntry is not 32 bytes "
-                     "here, or the layout changed" % (path, remainder, nentries))
+        expected = 4 + nentries * 32
+        slack = remainder - expected
+        if slack < 0 or slack > FOOTER_SLACK:
+            die("%s trailing %d bytes != 4 + %d*32 (+<=%d footer) -- FScriptObjectEntry is not "
+                "32 bytes here, or the layout changed" % (path, remainder, nentries,
+                                                          FOOTER_SLACK))
     return names
 
 

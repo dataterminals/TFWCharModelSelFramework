@@ -1,7 +1,9 @@
 # Container staleness is REFUTED — and what the crash is still not explained by
 
 **STATUS 2026-09-10: the script-object-store hypothesis is dead, measured three independent ways.
-The v0.2.5 rebuild is a NULL INTERVENTION with respect to it. CMSF's launch crash is unexplained.**
+The v0.2.5 rebuild is a NULL INTERVENTION with respect to it. The mod-detection subsystem is dated
+out too — it shipped six weeks earlier, at build `24479102`. CMSF's launch crash is unexplained,
+and the leading untested candidate is `PackageImport` public-export-hash staleness.**
 
 `docs/10-patch-25071553.md` was written on 2026-09-09 and asserts that CMSF's pak crashes the game
 because the game's global script-object store changed between the July cook and the live one. That
@@ -115,7 +117,35 @@ missing import, which is fatal in a shipping build.
 Nothing has tested this. It is a different mechanism from the script store, it needs no game launch,
 no usmap and no AES key for the mod pak, and it is the next thing to run.
 
-### 2. A mod-detection subsystem shipped in this window
+### 2. ~~A mod-detection subsystem shipped in this window~~ — DATED OUT, build `24479102`
+
+**Retired as a crash candidate on 2026-09-10.** The datamine repo archives a usmap per build, and
+a usmap is a full type dump, so this was answerable from disk:
+
+| usmap | `FWModIntegritySubsystem` |
+|---|---|
+| `archive/…-build24097213.usmap` | **absent** |
+| `archive/…-build24479102.usmap` | **PRESENT** |
+| live map (`24536482`) | PRESENT |
+
+So the subsystem first appears at **`24479102`, the 2026-07-30 patch** — six weeks before the
+crash reports begin, and the collection ran against it symptomless the whole time. It cannot
+explain an onset at `0.9.5.0`. Independently corroborated by the ops board from a second
+artifact: `FWPakManifest.json` is absent in the `pre-24479102` baseline and present in
+`post-24479102`, so manifest and subsystem arrived in the *same* patch.
+
+Controls, since a bare grep over a binary proves nothing alone: `FWWeaponDefinition` and
+`FWPartySubsystem` hit in all three maps; `FWAIGoal_Investigate_Phased` and
+`BTTask_SuppressiveFire`, both `25071553`-only, miss in all three.
+
+Caveat: a usmap dates the **type**, not when behaviour behind it was switched on.
+
+**It remains a live concern — just not for this crash, and not for CMSF.** `IsStockWeapon` plus
+the damage-override path is aimed at the weapon mods, and the party-wide predicates at
+multiplayer. Full symbol list and the dating table live in
+`tfw-update-ops/state/scriptobjects-25071553.md`.
+
+<details><summary>Original text, kept for the record</summary>
 
 New in the live store, absent in July — 13 symbols forming one coherent surface:
 
@@ -146,6 +176,8 @@ baseline going forward.
 **Blast radius is the weapon mods, not the skin mods.** `IsStockWeapon` + damage override is what
 would act on `AllWeaponsUnlockableFix`, `HeavyRifleRebalanceFix` and the community damage mods. CMSF
 appends cosmetic rows and touches no weapon stat.
+
+</details>
 
 ### 3. Unversioned property-schema drift
 
