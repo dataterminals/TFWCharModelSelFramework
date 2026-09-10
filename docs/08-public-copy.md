@@ -129,6 +129,47 @@ and Archengius) and [UE4SS](https://github.com/UE4SS-RE/RE-UE4SS).
 
 ## C. Announcement / release notes
 
+### v0.3.0 — ready to post (field-tested 2026-09-10)
+
+Both headline claims were verified in-game on build `25071553`, single-player, with the log kept:
+the pak mounts and populates (`39 skin(s) listed` = 7 vanilla + 32 CMSF), and Old Man — who this
+account owns no skin for — got a working skin button that survives leaving the ready room.
+
+**The one claim to get exactly right, because getting it wrong is a takedown:** v0.3.0 does **not**
+unlock skins you have not bought. It reveals the *menu*. Old Man's panel listed **34** — his 2 base
+skins plus 32 CMSF slots — and **neither of the two locked skins this account does not own.** Say
+this plainly on the page; "the skin menu appears for every character" reads like a DLC unlocker if
+you do not.
+
+Also honest, and worth one line rather than silence: the launch crash was never reproduced on the
+dev machine, so the rebuild is not *isolated* as its cause. If someone still crashes on v0.3.0 that
+is new information, not a failed fix — ask for their `UE4SS.log`.
+
+> **CMSF v0.3.0 — the launch crash is fixed, and so is the missing skin menu**
+>
+> Two things, and the second one has been misdiagnosed since July.
+>
+> **The crash on launch is fixed.** A pak is built against one specific version of the game's
+> cooked content, and v0.2.4's was built against a pre-0.9.5.0 build. It is rebuilt against the
+> current one. If you deleted `CMSF_core_9` to stop the crash, you can put it back.
+>
+> **The skin menu now appears for characters you own no skin DLC for.** If a character had no
+> skin-select button at all — Old Man for most people — that was never CMSF failing to add skins.
+> The game hides the button unless you own at least one of that character's *purchasable* skins,
+> and CMSF was adding its slots to a list the button does not look at. It now un-hides the button,
+> and keeps it un-hidden when you leave the ready room and come back.
+>
+> **To be clear about what that does and does not do:** it gives you the menu, not the skins. Your
+> base skins and any CMSF slots you have installed become selectable. Skins you have not bought
+> still do not appear — they are not in the list, and CMSF does not put them there.
+>
+> Old Man is the case worth calling out: one of his two skins is earned by beating the Water
+> Thief rather than sold, so no amount of buying DLC gives him a menu. He has one now.
+>
+> New console command `cmsfbutton` reports what the mod can see, if you want to check.
+
+---
+
 ### v0.2.3 — ready to post (field-tested 2026-07-27)
 
 Verified in-game: four states (pruning on/off × poll on/off) with the tiles resident, plus a
@@ -212,9 +253,17 @@ Things it would be easy to overstate, and should not be:
 - **"Unlimited skins."** The pool is 32 per character. Large, not unlimited, and the number is
   a permanent ABI once released.
 - **"Works in co-op."** Untested. `docs/03-multiplayer.md` has theory, not observation.
-- **"Survives game updates."** The framework must be rebuilt from each new cook, and that has
-  never been exercised against a real patch. Author paks *should* survive untouched, because
-  slot paths are append-only — but "should" is doing work there.
+- **"Survives game updates."** The framework must be rebuilt from each new cook. As of 2026-09-10
+  this HAS now been exercised against a real patch — `25071553` broke v0.2.4 and a rebuild fixed
+  it — so the process is proven once. That is not the same as automatic: every patch still needs a
+  rebuild and a launch. Author paks *should* survive untouched, because slot paths are
+  append-only — but "should" is still doing work there.
+- **"Unlocks skins" / "free DLC skins."** It does NOT, and this is the most damaging thing on the
+  list to get wrong. v0.3.0 un-hides the skin *menu*; the skins it lists are your base skins plus
+  CMSF slots you installed. Measured: Old Man's panel showed 34 = 2 base + 32 CMSF, and neither of
+  his two unowned locked skins. Never phrase rung 10 as unlocking anything.
+- **"Rung 10 is safe in co-op."** Specifically untested. Every measurement is single-player, where
+  only one ready-room panel is occupied. In a party it could raise another member's button.
 - **"Just works with MO2."** It does, but only with the companion plugin and the right
   priority. Manual install is the supported baseline.
 - Anything implying a skin will look right without the author testing it. The build tool
