@@ -70,6 +70,48 @@
 #
 #   bash tools/verify_build.sh
 #
+# ---------------------------------------------------------------------------------------------
+# WHICH OF THESE CHECKS SURVIVE A STALE USMAP  (gate 1b was RED on build 25071553)
+#
+# The right question is not "is the usmap stale" but: DID THIS CONCLUSION COME FROM THE TYPE
+# MAP, OR FROM THE PACKAGE'S OWN NAME TABLE? Framing due to the tfw-update-ops board; see
+# tfw-update-ops/docs/gate-1b-partial-validity.md. A blanket "1b is red so nothing counts"
+# freezes work that is provably fine.
+#
+#   SOUND under a stale map -- name-table or byte derived:
+#     * check [5]'s byte comparison via `retoc to-legacy`, which is passed NO usmap at all.
+#       This is the gold standard in this file and the reason it exists.
+#     * check [5]'s script-object name-set diff (tools/scriptobjects_diff.py) -- name batches.
+#     * check [1]/[2] filelist and path existence, and FPackageId binding.
+#     * DataTable ROW KEYS and soft-path STRINGS -- both live in the package name map.
+#     * anything tools/zen_imports.py reports: raw zen header bytes, no type map.
+#
+#   VOID under a stale map -- type-map derived:
+#     * property counts, property names, any scalar value, "0 properties dropped",
+#       and any catalog rebuilt from a decode.
+#
+# THE REFINEMENT THAT ACTUALLY BITES, and it applies to checks [3] and [4] here:
+# a detected DIFFERENCE is sound; a detected IDENTITY is not. A stale map TRUNCATES -- on this
+# build FWWeaponDefinition stops at 30 properties of 57 -- and anything past the truncation
+# point is never compared and therefore reports clean. So "identical" only ever means
+# "identical in the part the map could still reach", and a soft-reference check can report
+# 0 DANGLING because it never reached the properties that hold the references.
+#
+# So the reversion check [4] survives BECAUSE it rests on row keys, soft-path strings and array
+# lengths. It would not survive if it rested on property shape. That is a stronger claim than
+# "check [5] is the one I trust", and it was verified rather than asserted:
+#
+#   DT_SkinUIData, live base: 33 rows x 2 FSkinDetails soft paths = 66 occurrences, of which
+#   53 are DISTINCT -- the 13-path gap is exactly 7 character portraits shared across rows
+#   (ScavGirl x5, BagMan x4, MaskMan x3, OldMan/Gunhead/Shaman/DLC04_Scavgirl x2). The check
+#   reports 53. The arithmetic closes to the unit, so FSkinDetails is decoding FULLY and this
+#   particular "0 dropped" is not a truncation artifact.
+#
+# That verification covers FSkinDetails (4 fields). It does NOT extend to the pawn Blueprints,
+# whose property shape is exactly the risky case -- so treat [3]/[4] pawn numbers as bounded by
+# the caveat above until 1b is green.
+# ---------------------------------------------------------------------------------------------
+
 # Requires: the game installed, the forever-winter-datamine decoder built, python.
 # NEVER launches the game. Reads paks only.
 # Exit: 0 clean - 1 real breakage found - 2 the check could not run.
