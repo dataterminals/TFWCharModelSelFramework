@@ -124,6 +124,14 @@ DataTable-writing binary.
 | `true` (default) | 2 entries | owned `LockedSkinChoices` only |
 | `false` (cleared) | 7 entries | 5 `SkinChoices` + 2 owned locked |
 
+⚠ **These are counts for *this* account, not constants.** Scav Girl's `LockedSkinChoices` array
+is **3** long and the default filter showed **2** — the filter feeds on the **owned subset**, and
+this account is not entitled to the third. So the general form is
+`len(SkinChoices) + |owned ∩ LockedSkinChoices|`, which for Scav Girl is **5–8**. The 7 above is
+correct and must not be "corrected" to 8 by reading array lengths off the cook; 8 is the roster
+ceiling, which only an account entitled to all three ever sees. `docs/10-patch-25071553.md` made
+exactly that mistake and retracts it. The zero case is P1's mechanism.
+
 So the shipped **base skins are not selectable at all** by default: the menu offers only
 entitlement-gated DLC skins, and once a DLC skin is picked there is no UI route back. A base
 skin reappears only when you **die in a raid and respawn**, at which point the game randomly

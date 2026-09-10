@@ -471,8 +471,13 @@ local function enforceOne(w, verbose, live, mayForce)
     -- Always report the list size when asked, not only when something changed.
     -- The poll usually gets there first, so the earlier "only on change" version
     -- printed nothing on a manual run and left the count to be eyeballed off a
-    -- screenshot. This number is the actual verification: vanilla Scav Girl
-    -- unfiltered is 7, so anything above that is an appended CMSF skin.
+    -- screenshot. This number is the actual verification -- but read it as a DELTA,
+    -- not against a constant. Unfiltered Scav Girl is 5 SkinChoices + however many of
+    -- her 3 LockedSkinChoices the account is entitled to, i.e. 5-8 (7 on the dev
+    -- account, which owns 2 of 3). A jump of exactly +32 is the framework populating;
+    -- an absolute number means nothing without knowing what the account owns. In
+    -- particular 0 is NOT proof the read failed -- on an unentitled account it is what
+    -- a correctly working default-filtered panel reports. See docs/00-findings.md.
     if verbose then
         if n >= 0 then
             log(string.format("selector lists %d skin(s)%s", n,

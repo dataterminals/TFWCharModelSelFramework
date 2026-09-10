@@ -13,8 +13,9 @@
 --
 -- HOW TO READ IT. Run `cmsftime` with the stress pak on, then again with it off (the
 -- `CMSFUnlock ONLY (control)` mod is exactly this baseline). Vanilla Scav Girl unfiltered
--- lists 7. The delta between the two Init() figures is what a deep pool costs, every time
--- the player opens the menu.
+-- lists 5-8 depending on entitlement (7 on the dev account); it is not a constant, so read
+-- the delta rather than the absolute. The delta between the two Init() figures is what a deep
+-- pool costs, every time the player opens the menu.
 --
 -- SAFETY. Init() is a no-arg UFunction the game itself calls constantly, and CMSFUnlock has
 -- called it on every poll since v0.1.1. Everything here is game-thread wrapped and pcall'd.
