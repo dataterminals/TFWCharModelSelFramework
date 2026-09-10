@@ -186,6 +186,37 @@ the damage-override path is aimed at the weapon mods, and the party-wide predica
 multiplayer. Full symbol list and the dating table live in
 `tfw-update-ops/state/scriptobjects-25071553.md`.
 
+**Update 2026-09-10 — the manifest's arithmetic, now that SylDesk is on `25071553`.** The dating
+above is untouched and the candidate stays retired, but two of the *reasons* given for it were
+wrong and CMSF's exposure is now much narrower than "unknown".
+
+`FWPakManifest.json`'s `TailHash` is **SHA-1 of the last 65,536 bytes** of each file, whole-file
+when smaller — verified on **89 of 89** entries against the live install, zero wrong. So:
+
+- **CMSF modifies none of the 89 listed files.** Every entry is a container shipped directly in
+  `Content{BS}Paks{BS}`; CMSF adds a separate pak trio under `Content{BS}Paks{BS}Mods{BS}` and rewrites nothing.
+  Under a "do the listed files still hash correctly" reading, **CMSF passes untouched** and the
+  manifest is not a candidate explanation for P0 at all.
+- **"Any unlisted container is a tamper" is dead.** A clean, freshly-patched `Content{BS}Paks{BS}` holds
+  **30 `.sig` files and `FWPakManifest.json` itself**, none of them in the manifest. That rule would
+  make the stock game flag itself.
+- **What survives is one question, not a subsystem.** An enumeration filtered by extension would
+  skip every `.sig` and catch a mod pak — *if* it recurses into subdirectories. That is the whole
+  of CMSF's exposure here and it cannot be read off the manifest.
+
+One stated reason above should be struck: the original text argued that startup container
+inspection "fits the crash far better than an inert hash map does". The hash map is **not**
+expensive — the entire check is ~5.8 MB of reads across 89 files against a 50 GB install, so cost
+was never a reason to think it dormant. That correction cuts *toward* the subsystem being live, and
+the candidate stays retired purely on the six-week dating, which is the sound argument.
+
+The `Signature` (40 hex, SHA-1-shaped) did not reproduce under 433 keyless constructions, so it is
+not a plain digest of the manifest's own data — but that is a bounded negative, not evidence of
+keying. **Do not repeat it as "the manifest is signed."**
+
+⚠ And the caveat in the box below still governs all of this: **this rig runs Signature Bypass**,
+so nothing measured here is a valid control for any integrity path.
+
 <details><summary>Original text, kept for the record</summary>
 
 New in the live store, absent in July — 13 symbols forming one coherent surface:
