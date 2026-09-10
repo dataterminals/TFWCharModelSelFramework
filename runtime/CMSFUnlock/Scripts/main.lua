@@ -143,9 +143,10 @@
 -- to get is `cmsfunlock`'s "selector lists N skin(s)" at the broken character — 0 means the
 -- panel never populated and the forced Init did not take; 39 means it populated and the tiles
 -- are hidden.
-local VERSION = "0.2.4"
+local VERSION = "0.3.0"
 
 local WIDGET = "WBP_SkinSelection_C"
+local BUTTON = "WBP_SkinSelectButton_C"   -- rung 10; the P1 gate, a sibling of WIDGET
 local POLL_MS = 1000         -- the tick; the object-array scan runs on a backoff MULTIPLE of it
 local IDLE_MAX_TICKS = 8     -- ceiling on that backoff, so an idle raid walks once per 8 s
 
@@ -191,6 +192,12 @@ local VIS_COLLAPSED = 1      -- ESlateVisibility::Collapsed, which also surrende
 -- Restoring means SelfHitTestInvisible, NOT Visible(0): that is what these tiles read as
 -- when the game builds them, so anything else would be this mod inventing a state.
 local VIS_DEFAULT = 4        -- ESlateVisibility::SelfHitTestInvisible
+-- ESlateVisibility::Hidden. Distinct from Collapsed and the distinction is the whole of rung 10:
+-- measured 2026-09-10, the game leaves an EMPTY ready-room slot's skin button Collapsed(1) and
+-- sets a REAL character's to Hidden(2) when they own none of that character's locked skins. So
+-- keying on 2 targets occupied panels only, and never an unused multiplayer slot, without having
+-- to identify which slot the local player is in.
+local VIS_HIDDEN = 2
 
 -- This UE4SS build hands struct members and array elements back as RemoteUnrealParam
 -- WRAPPERS. Calling a UObject method on one throws; indexing further into one silently
@@ -582,6 +589,86 @@ end
 -- GameInstance-owned and keep their identities from the main menu through the hub (measured,
 -- field test #2), so the cache lives until a raid load tears the frontend down. Returns the
 -- aggregates the loop logs, plus live for the backoff decision.
+-- ---------------------------------------------------------------------------------------
+-- Rung 10 - the skin-select BUTTON. Measured 2026-09-10 on 25071553; see
+-- docs/10-patch-25071553.md. This is a DIFFERENT gate from SelectLockedSkinsOnly and it is the
+-- one that produced every P1 report:
+--
+--   panel   WBP_SkinSelection_C     always constructed, all four slots, for every character
+--   BUTTON  WBP_SkinSelectButton_C  Hidden(2) unless the character owns >=1 LockedSkinChoices
+--   filter  SelectLockedSkinsOnly   what an OPEN panel lists - rungs 1-9, all this mod ever did
+--
+-- Old Man is the case in the wild: his two entries are ThunderdomeWin, earned by beating the
+-- Water Thief rather than sold, and OldMan.Ber. An account that bought every skin pack owns
+-- neither, so he alone has no button - which is why "buy the DLC" was never the workaround.
+--
+-- WHY THIS IS SAFE TO WRITE. The button is not absent, it is Hidden: the instance is authored
+-- Collapsed in WBP_PlayerStatusWidget and the game raises or lowers it per character. Writing
+-- ESlateVisibility on a widget that already exists is what prune() has done to tiles since v0.1.
+--
+-- WHY IT MUST BE ON THE POLL. Field-tested: a one-shot write works and then the button vanishes
+-- again on leaving the ready room or switching menu page, because the panel is rebuilt and the
+-- game re-lowers it. Exactly the filter's problem, so it gets the filter's answer.
+--
+-- ONLY Hidden(2) IS TOUCHED. Collapsed(1) is an unoccupied slot and 0/4 is a character who has
+-- earned the button honestly; neither is ours to change. Because the write lands on 2 and leaves
+-- 4, a raised button is not rewritten every tick - the read alone settles it.
+--
+-- MULTIPLAYER IS UNTESTED. Every measurement behind this is single-player, where only
+-- Player1ReadyPanel is ever occupied. In a party, another member's panel is also occupied and
+-- could also be Hidden, and this would raise their button too. Whether that lets a client touch
+-- someone else's skin, is server-rejected, or merely desyncs the display is UNKNOWN. If it
+-- misbehaves, restricting to the local player's panel is the first thing to try. See
+-- docs/03-multiplayer.md.
+local buttonCache = {}
+
+-- Rebuilt on the WALK, alongside liveCache, so steady state stays walk-free. One extra
+-- FindAllOf on a path that already runs rarely.
+local function refreshButtonCache()
+    buttonCache = {}
+    local found = FindAllOf(BUTTON)
+    if not found then return end
+    for _, b in pairs(found) do
+        local ok = false
+        pcall(function() ok = b:IsValid() end)
+        -- The template is deliberately excluded. A write there is inherited by every panel
+        -- built afterwards, which for a per-character control would leak the button onto
+        -- characters that legitimately have none.
+        if ok and isLiveInstance(b) then buttonCache[#buttonCache + 1] = b end
+    end
+end
+
+-- Cheap: property read per cached handle, write only on the ones actually lowered.
+local function enforceButtons()
+    local raised, valid = 0, 0
+    for _, b in ipairs(buttonCache) do
+        local ok = false
+        pcall(function() ok = b:IsValid() end)
+        if ok then
+            valid = valid + 1
+            local vis
+            pcall(function() vis = b.Visibility end)
+            if vis == VIS_HIDDEN and pcall(function() b:SetVisibility(VIS_DEFAULT) end) then
+                raised = raised + 1
+            end
+        end
+    end
+    return raised, valid
+end
+
+-- Raise, and if the cache came back empty of valid handles, walk once and retry. A rebuilt
+-- ready-room panel kills the button handles at the same moment it re-lowers the button, so
+-- "nothing valid" is precisely when a refresh is owed -- and it is also the only time we pay
+-- for the extra FindAllOf.
+local function raiseButtons()
+    local raised, valid = enforceButtons()
+    if valid == 0 then
+        refreshButtonCache()
+        raised = enforceButtons()
+    end
+    return raised
+end
+
 local function pollOnce()
     local mayForce = forceGate()
     if #liveCache > 0 then
@@ -601,7 +688,7 @@ local function pollOnce()
                 applied, pruned, restored, empty = applied + a, pruned + h, restored + r, empty + e
             end
             noteEmpty(mayForce, empty)
-            return applied, pruned, restored, #liveCache
+            return applied, pruned, restored, #liveCache, raiseButtons()
         end
         -- Something in the cache died — a map change. Fall through to a walk, which either
         -- refills the cache (back in the frontend) or reports zero live (raid), and the
@@ -610,7 +697,10 @@ local function pollOnce()
     end
     local applied, _, pruned, restored, live, empty = apply(false, mayForce)
     noteEmpty(mayForce, empty)
-    return applied, pruned, restored, live
+    -- The selector walk just happened, so refresh the buttons on the same beat rather than
+    -- waiting for raiseButtons() to discover the handles are dead on the next tick.
+    refreshButtonCache()
+    return applied, pruned, restored, live, enforceButtons()
 end
 
 -- Backoff state. `scanEvery` is in ticks, not milliseconds, because LoopAsync's interval is
@@ -632,7 +722,7 @@ LoopAsync(POLL_MS, function()
     -- UE4SS serialises access to the one Lua state, and the worst a stale read could cost is
     -- a single early or late scan.
     ExecuteInGameThread(function()
-        local applied, pruned, restored, live = pollOnce()
+        local applied, pruned, restored, live, raised = pollOnce()
         -- Decremented HERE, not inside prune(): one pass covers every panel, so a sweep is
         -- consumed per pass rather than per widget.
         if restorePasses > 0 then restorePasses = restorePasses - 1 end
@@ -664,6 +754,12 @@ LoopAsync(POLL_MS, function()
         if restored > 0 then
             log(string.format("restored %d claimed CMSF tile(s)", restored))
         end
+        -- Rung 10. Worth a line every time rather than once: each occurrence is the game
+        -- having re-lowered the button on a panel rebuild, which is the behaviour that made
+        -- the one-shot write look like it had failed.
+        if raised > 0 then
+            log(string.format("raised %d skin-select button(s) the game had hidden", raised))
+        end
     end)
     return false      -- never stop
 end)
@@ -685,6 +781,12 @@ RegisterConsoleCommandHandler("cmsfunlock", function()
         log(string.format("apply: %d changed / %d selector(s) found (%d live), %d slot(s) hidden",
             applied, seen, live, pruned))
         if restored > 0 then log(string.format("  restored %d claimed tile(s)", restored)) end
+        -- Rung 10 too. This handler goes through apply() rather than pollOnce(), so without
+        -- this the one command a player runs when the menu looks wrong would fix the filter
+        -- and leave the button hidden -- which is the half that made v0.2.4 look broken.
+        refreshButtonCache()
+        local raised = enforceButtons()
+        log(string.format("  %d skin-select button(s) live, %d raised", #buttonCache, raised))
     end)
     return true
 end)
@@ -763,43 +865,32 @@ end)
 -- run is informative even if the write achieves nothing, and it is NOT wired into the poll:
 -- un-collapsing a control the game deliberately hid is not something to do once per second on
 -- every panel until it is known to be safe and to actually open a working menu.
-local BUTTON = "WBP_SkinSelectButton_C"
-
+-- Diagnostic for rung 10. The poll already raises buttons on its own; this reports WHAT it can
+-- see and why, which is the part a field report needs. vis=1 Collapsed is an unoccupied slot,
+-- vis=2 Hidden is a real character the game says owns nothing, 0/4 is already raised.
 RegisterConsoleCommandHandler("cmsfbutton", function()
     ExecuteInGameThread(function()
-        local found = FindAllOf(BUTTON)
-        if not found then
-            log("cmsfbutton: no " .. BUTTON .. " in memory — stand in the ready room and retry")
+        refreshButtonCache()
+        if #buttonCache == 0 then
+            log("cmsfbutton: no live " .. BUTTON .. " — stand in the ready room and retry")
             return
         end
-        local seen, changed, already = 0, 0, 0
-        for _, b in pairs(found) do
-            if b:IsValid() then
-                seen = seen + 1
-                local nm, vis
-                pcall(function() nm = tostr(b:GetFullName()) end)
-                pcall(function() vis = b.Visibility end)
-                local live = isLiveInstance(b)
-                log(string.format("  [%s] vis=%s  %s",
-                    live and "live" or "template", tostring(vis), tostring(nm)))
-                -- The template is left alone. A cleared flag on it is inherited by future
-                -- instances, which is welcome for the filter but NOT for a control the game
-                -- hides per character: it would leak the button onto characters that legitimately
-                -- have no skins, on every panel built afterwards.
-                if live then
-                    if vis == VIS_DEFAULT then
-                        already = already + 1
-                    elseif pcall(function() b:SetVisibility(VIS_DEFAULT) end) then
-                        changed = changed + 1
-                    end
-                end
-            end
+        for _, b in ipairs(buttonCache) do
+            local nm, vis
+            pcall(function() nm = tostr(b:GetFullName()) end)
+            pcall(function() vis = b.Visibility end)
+            local what = "?"
+            if vis == VIS_COLLAPSED then what = "Collapsed - empty slot, left alone"
+            elseif vis == VIS_HIDDEN then what = "HIDDEN - no owned skin; this is the P1 case"
+            else what = "already raised" end
+            -- The slot name is the only part of a 200-char transient path anyone can read.
+            local slot = nm and nm:match("Player%dReadyPanel") or "?"
+            log(string.format("  %-18s vis=%-4s %s", slot, tostring(vis), what))
         end
-        log(string.format("cmsfbutton: %d button(s) found, %d already shown, %d un-collapsed",
-            seen, already, changed))
-        if changed > 0 then
-            log("  now click it. If the panel opens, P1's fix is a visibility write and nothing more.")
-            log("  If it opens EMPTY, run `cmsfunlock` — the filter is the second gate.")
+        local raised = enforceButtons()
+        log(string.format("cmsfbutton: %d live button(s), %d raised now", #buttonCache, raised))
+        if raised > 0 then
+            log("  the poll will keep it raised through menu changes and ready-room re-entry")
         end
     end)
     return true
@@ -808,4 +899,4 @@ end)
 log("v" .. VERSION .. " loaded — selector will list every skin, and unclaimed CMSF slots are hidden.")
 log("  `cmsfunlock` force + report   `cmsfoff` disable")
 log("  `cmsfnoprune` / `cmsfprune` toggle tile pruning — the A/B for the stutter")
-log("  `cmsfbutton` P1 probe — report and un-collapse the skin-select button")
+log("  `cmsfbutton` report the skin-select buttons rung 10 raises (P1)")
