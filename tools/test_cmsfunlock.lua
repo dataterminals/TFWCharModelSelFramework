@@ -29,7 +29,7 @@ local here = (arg and arg[0] or ""):match("^(.*)[/\\][^/\\]*$") or "."
 local SRC = (arg and arg[1]) or (here .. "/../runtime/CMSFUnlock/Scripts/main.lua")
 
 -- ESlateVisibility, as the mod names them.
-local COLLAPSED, DEFAULT = 1, 4
+local COLLAPSED, DEFAULT, HIDDEN = 1, 4, 2
 
 -- A WBP_SkinButton_C. `iconPath` is what the brush currently RESOLVES to, which is not
 -- necessarily the slot's own path -- the pooling hazard the mod's claim race is about. Tests
@@ -67,12 +67,37 @@ local function panel(opts)
     return w
 end
 
+-- A WBP_SkinSelectButton_C. `vis` is the state the GAME left it in: COLLAPSED for an empty
+-- ready-room slot, HIDDEN for a real character who owns none of that character's locked skins,
+-- DEFAULT for one who does. `slot` only shows up in GetFullName, which is where the mod reads
+-- the Player<N>ReadyPanel label for its diagnostic.
+local function button(vis, live, slot)
+    local b = { Visibility = vis, __live = live ~= false }
+    function b:IsValid() return true end
+    function b:SetVisibility(v) self.Visibility = v end
+    function b:GetFullName()
+        if b.__live then
+            return "WBP_SkinSelectButton_C /Engine/Transient.Foo:" ..
+                   (slot or "Player1ReadyPanel") .. ".PlayerStatus.WBP_SkinSelectButton"
+        end
+        return "WBP_SkinSelectButton_C /Game/Bar.WBP_SkinSelectButton"
+    end
+    return b
+end
+
 -- A pristine copy of the mod per scenario, so one test's verdict cache cannot reach the next.
 local function load(widgets)
     local env = setmetatable({}, { __index = _G })
     local out, loop, cmds = {}, nil, {}
     env.print = function(s) out[#out + 1] = (s:gsub("\n$", "")) end
-    env.FindAllOf = function() return widgets end
+    -- Class-aware, but only if the caller asked for it: a flat array (every case before J)
+    -- is returned for any class, exactly as before. A table KEYED by class name lets rung 10's
+    -- FindAllOf(BUTTON) get buttons while FindAllOf(WIDGET) still gets panels -- without which
+    -- the button cache silently fills with panels and rung 10 is untested rather than tested.
+    env.FindAllOf = function(cls)
+        if cls ~= nil and widgets[cls] ~= nil then return widgets[cls] end
+        return widgets
+    end
     env.ExecuteInGameThread = function(fn) fn() end
     env.LoopAsync = function(_, fn) loop = fn end
     env.RegisterConsoleCommandHandler = function(name, fn) cmds[name] = fn end
@@ -227,5 +252,40 @@ do
 end
 
 print("")
+-- ---------------------------------------------------------------------------------------
+print("J. rung 10: only a HIDDEN button is raised, never a Collapsed empty slot")
+do
+    -- Four live ready-room buttons plus the asset template, which is the real shape: one
+    -- occupied panel whose character owns nothing (HIDDEN), three unoccupied (COLLAPSED).
+    local hidden   = button(HIDDEN,    true,  "Player1ReadyPanel")
+    local empty2   = button(COLLAPSED, true,  "Player2ReadyPanel")
+    local empty3   = button(COLLAPSED, true,  "Player3ReadyPanel")
+    local earned   = button(DEFAULT,   true,  "Player4ReadyPanel")
+    local template = button(COLLAPSED, false)
+    local p = panel({ locked = false, kids = {} })
+    local m = load({
+        ["WBP_SkinSelection_C"]    = { p },
+        ["WBP_SkinSelectButton_C"] = { hidden, empty2, empty3, earned, template },
+    })
+    m.tick()
+    check("HIDDEN button raised",                      hidden.Visibility,   DEFAULT)
+    check("empty slot 2 left Collapsed",               empty2.Visibility,   COLLAPSED)
+    check("empty slot 3 left Collapsed",               empty3.Visibility,   COLLAPSED)
+    check("already-earned button untouched",           earned.Visibility,   DEFAULT)
+    check("asset template never written",              template.Visibility, COLLAPSED)
+
+    -- The regression that defeated the one-shot write: the game re-lowers the button when it
+    -- rebuilds the panel, and the poll has to catch it on the next tick without a command.
+    hidden.Visibility = HIDDEN
+    m.tick()
+    check("re-lowered button raised again on next tick", hidden.Visibility, DEFAULT)
+
+    -- And a raised button must not be rewritten every tick -- the read alone has to settle it.
+    local writes = 0
+    hidden.SetVisibility = function(self, v) writes = writes + 1; self.Visibility = v end
+    m.tick(); m.tick()
+    check("no redundant writes once raised",            writes,            0)
+end
+
 print(fails == 0 and "ALL PASS" or (fails .. " FAILURE(S)"))
 os.exit(fails == 0 and 0 or 1)
