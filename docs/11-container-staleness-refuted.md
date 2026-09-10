@@ -1,9 +1,11 @@
 # Container staleness is REFUTED — and what the crash is still not explained by
 
-**STATUS 2026-09-10: the script-object-store hypothesis is dead, measured three independent ways.
-The v0.2.5 rebuild is a NULL INTERVENTION with respect to it. The mod-detection subsystem is dated
-out too — it shipped six weeks earlier, at build `24479102`. CMSF's launch crash is unexplained,
-and the leading untested candidate is `PackageImport` public-export-hash staleness.**
+**STATUS 2026-09-10: EVERY container-level mechanism is now eliminated for CMSF, tested against
+the game's own cooked copies rather than against our own rebuild. The mod-detection subsystem is
+dated out as well — it shipped six weeks earlier, at build `24479102`. The v0.2.5 rebuild is a
+NULL INTERVENTION in all three import/export dimensions and therefore CANNOT be the fix. CMSF's
+launch crash is unexplained, and the front-runner is now that the framework pak is not the guilty
+file at all.**
 
 `docs/10-patch-25071553.md` was written on 2026-09-09 and asserts that CMSF's pak crashes the game
 because the game's global script-object store changed between the July cook and the live one. That
@@ -106,16 +108,55 @@ exist.
 
 ## Surviving candidates for the crash, ranked
 
-### 1. `PackageImport` public-export-hash staleness — the properly-formed container hypothesis, UNTESTED
+### 1. ~~`PackageImport` public-export-hash staleness~~ — TESTED AND ELIMINATED
 
-This is what "container staleness" should have meant. CMSF's 199 packages carry **1,094
-PackageImports**, which resolve by `(ImportedPackageIndex, ImportedPublicExportHashIndex)` against
-the **target base package's public export hashes** — and those live in the live cook, not in the
-script store. A renamed or removed *public export* in a base package that 0.9.5.0 reworked makes a
-missing import, which is fatal in a shipping build.
+The properly-formed container hypothesis, and the last one standing. Run 2026-09-10 with
+`tools/zen_imports.py`; both directions come back clean.
 
-Nothing has tested this. It is a different mechanism from the script store, it needs no game launch,
-no usmap and no AES key for the mod pak, and it is the next thing to run.
+The test that matters is the **inverse** of the usual worry. Because CMSF *overrides* seven base
+packages, the game gets **our** export map instead of its own, and every other package that
+imports one of them resolves by `PublicExportHash`. So the dangerous question is not "are our
+imports stale" but "does our July-cooked override still **provide** every hash the September game
+imports from it". A missing one is a missing import and fatal in a shipping build — and it breaks
+the *base game*, not the mod.
+
+Measured against the game's own cooked copies, pulled per-chunk from `pakchunk0_s1` and
+`pakchunk20_s12`:
+
+| package | exports | PROVIDES covers game | EXPECTS loses nothing |
+|---|---|---|---|
+| `BP_Player_BagMan` | 61 | yes, identical | yes |
+| `BP_Player_Girl` | 68 | yes, identical | yes |
+| `BP_Player_Gunhead` | 69 | yes, identical | yes |
+| `BP_Player_MaskMan` | 42 | yes, identical | yes |
+| `BP_Player_OldMan` | 37 | yes, identical | yes |
+| `BP_Player_Shaman` | 61 | yes, identical | yes |
+| `DT_SkinUIData` | 1 | yes, identical | yes (+192 expected, all supplied by our own pak) |
+
+`DT_SkinUIData` expecting 193 hashes where the game copy expects 1 is **the framework working**,
+not breaking: those are the 192 added rows pointing at CMSF own string tables. The deciding
+number is `game-only = 0` — nothing the live copy expected has gone missing from ours. Set
+*inequality* there is expected, and requiring set equality produces a false alarm. My first pass
+did exactly that and printed MISMATCH on a working mod, so the correct predicate is now written
+into the tool.
+
+**This also closes a caveat the earlier work could not.** Comparing the July pak against the
+v0.2.5 rebuild was retoc-vs-retoc: if retoc to-zen computed export hashes differently from the
+game cooker, that comparison would say nothing about the game. It does not — our hashes match the
+game own cooked copies exactly. So retoc hashing is game-compatible, and the July-vs-rebuild
+result stands on its own.
+
+**And the rebuild is a null intervention in all three dimensions, not just script imports:**
+
+    199 common packages, 2,754 import entries
+      ScriptImport 1,204   PackageImport 1,094   Null 456
+    expects   differ in 0 of 199 packages
+    imports   differ in 0 of 199 packages
+    provides  differ in 0 of 199 packages
+
+So **v0.2.5 cannot fix this crash by any container mechanism.** The only difference between the
+crashing pak and the rebuild is 2–22 scalar bytes in six pawn `.uexp` payloads. Shipping it as a
+fix would be shipping a hope.
 
 ### 2. ~~A mod-detection subsystem shipped in this window~~ — DATED OUT, build `24479102`
 
@@ -242,6 +283,17 @@ live build. **That is its owner-session's call, not this repo's.**
 
 ## What survives of the tooling
 
+`tools/zen_imports.py` is new: it names the packages in a raw-chunk directory, diffs two paks
+import/export surfaces, and compares an overriding pak against the game own copies. The zen layout
+it relies on is validated by three invariants rather than assumed — offsets monotonic and inside
+`HeaderSize`, and the import and export regions dividing exactly by 8 and 72 — so a layout change
+fails loudly instead of producing plausible-but-wrong numbers. On the CMSF pak it accepts 199 of
+200 chunks; the reject is the container header, which is not a package. Two recipes are baked into
+its docstring because both cost real time: `retoc list` prints **chunk IDs, not paths**, so
+grepping it for an asset name matches nothing for any container; and an overriding pak shares the
+base game chunk id for the package it overrides, so single chunks come out with `retoc get`
+instead of unpacking a 2 GB container.
+
 `tools/scriptobjects_diff.py` is still correct and worth keeping — but for the *right* predicate.
 It diffs name sets and reports **removals only**, treating growth as the non-event it is, and on
 this build it correctly reports "2 removed, nothing we ship references either, not exposed". It is
@@ -266,10 +318,15 @@ displaced exe is armed, per the ops board — and only then rebuild locally with
 
 ## Next moves, in order
 
-1. **Run the `PackageImport` export-hash check** (candidate 1). Launch-free, usmap-free. The one
-   container mechanism still untested, and it discriminates cleanly.
-2. **Regenerate the usmap** (gate 1b), which unblocks candidate 3.
-3. **Bisect on the reporter's machine, not by theory** — the one thing that separates candidates
-   1/2/3 from 4: does the crash happen with the framework pak *alone*, no skin paks?
-4. **Get `UE4SS.log`** and close gate 3 (candidate 6).
-5. Only then decide what ships.
+Static analysis has now eliminated everything it can reach. Two candidates died on measurement and
+a third was dated out; what remains cannot be settled from disk on this machine.
+
+1. **Bisect on a reporter machine.** The decisive step, and no longer optional: does the crash
+   happen with `CMSF_Core_9_P` **alone**, no skin slot paks installed? That one question separates
+   candidate 4 from everything else — and note that deleting `CMSF_core_9` also disables every
+   skin slot pak, so the community workaround never localised the fault in the first place.
+2. **Get `UE4SS.log`** and close gate 3 (candidate 6). Cheapest remaining evidence.
+3. **Regenerate the usmap** (gate 1b), which unblocks candidate 3 — the only mechanism left that
+   is testable from disk.
+4. **Do not ship v0.2.5 as a fix.** It is container-identical to the pak that crashes. It remains
+   the right artifact to ship *eventually*, on its own merits, once something is actually known.
