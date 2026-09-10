@@ -19,12 +19,17 @@
 #     ADDS ONLY  ForeverWinter/Content/CMSF/<Char>/<NN>/{SK_,T_,ST_}CMSF_<Char>_<NN>.uasset
 #                (:222, :296 -- the build FAILS if it ships anything else)
 #
-#   So there are two ways a patch breaks this mod, and both are checked below:
+#   So there are three ways a patch breaks this mod, and all three are checked below:
 #     1. a vanilla mesh or portrait the rows and SkinChoices arrays point at gets renamed
 #        -> the frozen override pins a dead name                     [soft-reference check]
 #     2. the devs ADD a skin row or a roster entry
 #        -> our whole-asset override silently DELETES their new content for every CMSF user
 #           and logs nothing anywhere                                [reversion check]
+#     3. the devs EDIT A VALUE IN PLACE in an asset we override -- same row keys, same paths,
+#        same array lengths, so checks 1 and 2 both report clean while the pak serves a
+#        months-old copy                                             [cook-drift check, #5]
+#        Found the hard way on 25071553: six pawn .uexp files drifted by 2-23 scalar bytes at
+#        identical length while checks 1-4 all passed. See docs/10-patch-25071553.md.
 #
 # THE FROZEN CONTRACT, AND WHY /Game/CMSF/ IS IGNORED
 #   CMSF publishes slot paths under /Game/CMSF/<Char>/<NN>/ as a PUBLIC ABI: third-party skin
@@ -181,10 +186,11 @@ rm -rf "$WORK"; mkdir -p "$WORK"
 cd "$WORK" || { echo "MISSING: cannot enter $WORK"; exit 2; }
 FAIL=0
 NORUN=0
+DRIFT=0   # 0 = in sync, 1 = cook has moved (rebuild owed), 2 = check [5] skipped
 
 # ---------------------------------------------------------------------------------------------
 echo
-echo "[1/4] regenerate the base filelist from the LIVE game"
+echo "[1/5] regenerate the base filelist from the LIVE game"
 BASELIST="$WORK/base-list"; mkdir -p "$BASELIST"
 FW_OUT="$BASELIST" FW_PAKS="$GAME_PAKS" FW_USMAP="$USMAP" "$DECODER" list >"$WORK/list.log" 2>&1
 if [ ! -s "$BASELIST/filelist.txt" ]; then
@@ -197,7 +203,7 @@ echo "      $(wc -l < "$BASELIST/filelist.txt") entries"
 # ---------------------------------------------------------------------------------------------
 # The inverted assertion. This is the one check in this repo that guards OTHER PEOPLE's paks.
 echo
-echo "[2/4] frozen-contract namespace must stay vacant"
+echo "[2/5] frozen-contract namespace must stay vacant"
 CMSF_HITS=$(grep -c "^ForeverWinter/Content/CMSF/" "$BASELIST/filelist.txt" || true)
 if [ "$CMSF_HITS" -eq 0 ]; then
   echo "      OK   0 ForeverWinter/Content/CMSF/ entries in the live build (required: 0)"
@@ -212,7 +218,7 @@ fi
 
 # ---------------------------------------------------------------------------------------------
 echo
-echo "[3/4] decode the CURRENT BASE owned assets (reference for the reversion check)"
+echo "[3/5] decode the CURRENT BASE owned assets (reference for the reversion check)"
 BASEOUT="$WORK/base"; mkdir -p "$BASEOUT"
 FW_OUT="$BASEOUT" FW_PAKS="$GAME_PAKS" FW_USMAP="$USMAP" \
   "$DECODER" dumptree "$OWNED" base >"$WORK/base.log" 2>&1
@@ -226,7 +232,7 @@ fi
 
 # ---------------------------------------------------------------------------------------------
 echo
-echo "[4/4] decode each shipped pak + verify"
+echo "[4/5] decode each shipped pak + verify"
 
 # label | path under dist/ (no extension) | kind
 #   override = owns DT_SkinUIData and the pawns -> mounted ALONE (see the header), reversion
@@ -426,6 +432,120 @@ PY
   [ $rc -eq 2 ] && NORUN=1
 done
 
+# ---------------------------------------------------------------------------------------------
+# Cook drift. The one check here that reads NO type map, and the one that caught what checks
+# [1]-[4] structurally cannot see.
+#
+# WHY IT EXISTS. Checks [3]/[4] compare rows, soft paths and SkinChoices entries. Those catch a
+# dev-ADDED row and a repointed path -- the loud failures. They are blind to a dev-side edit that
+# changes a VALUE in place: identical row keys, identical paths, identical array lengths, so the
+# reversion check prints "OK 0 dropped" while the shipped override is quietly serving a months-old
+# copy of the asset. Measured on build 25071553: every BP_Player_*.uasset header was
+# byte-identical to the pak's July copy and every .uexp was the same LENGTH, with 3-7 scalar bytes
+# changed. Checks [3] and [4] both passed clean on that. See docs/10-patch-25071553.md.
+#
+# HOW. `retoc to-legacy` is passed no usmap at all, so this comparison is immune to the type-map
+# staleness that gates everything else after a patch -- which is exactly when you most want it.
+# It compares the LIVE cook against build/framework/src, the pristine extraction the pak was
+# built from, so what it measures is "has the cook moved since this pak was generated".
+#
+# WHY DRIFT IS NOT A FAILURE. A drifted cook means a rebuild is owed, not that the pak is broken;
+# on 25071553 the drift was a few tuning scalars. It is reported, it is carried into the RESULT
+# line so it cannot be read as a clean bill of health, and it does not set the exit code.
+#
+# WHY IT IS OPPORTUNISTIC. It needs retoc and the game's AES key, neither of which this repo
+# ships and neither of which the other four checks require. Missing either is a SKIP with the
+# reason named -- never a silent pass, and never a hard failure for someone who only wanted
+# checks [1]-[4].
+echo
+echo "[5/5] cook drift since the pak was built (usmap-free byte comparison)"
+
+SRCTREE="$REPO/build/framework/src/ForeverWinter"
+RETOC_BIN="${RETOC:-}"
+if [ -z "$RETOC_BIN" ]; then
+  for cand in "$REPO/tools/retoc/retoc.exe" "$REPO/dist/release"/CMSF-author-*/retoc.exe; do
+    [ -f "$cand" ] && { RETOC_BIN="$cand"; break; }
+  done
+fi
+[ -z "$RETOC_BIN" ] && command -v retoc >/dev/null 2>&1 && RETOC_BIN="$(command -v retoc)"
+
+if [ ! -d "$SRCTREE" ]; then
+  echo "      SKIP no build/framework/src on this machine -- nothing to compare the live cook"
+  echo "           against. It appears once tools/cmsf_framework.py has been run here."
+  DRIFT=2
+elif [ -z "$RETOC_BIN" ]; then
+  echo "      SKIP retoc not found (tried \$RETOC, tools/retoc/, dist/release/CMSF-author-*/, PATH)."
+  DRIFT=2
+elif [ -z "${FW_AES_KEY:-}" ]; then
+  echo "      SKIP FW_AES_KEY is not set. It is the game's own pak key, so this repo does not"
+  echo "           ship it; retoc cannot open the containers without it."
+  DRIFT=2
+else
+  LIVELEG="$WORK/live-legacy"
+  rm -rf "$LIVELEG"; mkdir -p "$LIVELEG"
+  AESARG="${FW_AES_KEY}"
+  case "$AESARG" in 0x*|0X*) ;; *) AESARG="0x$AESARG" ;; esac
+  # retoc's -f takes ONE filter, not a comma-separated list: passing "$OWNED" whole matches
+  # nothing and still exits 0 -- which is how this check first reported 14 phantom drifts and
+  # then "compared 0 files". tools/cmsf_framework.py:127 loops one -f per filter; do the same.
+  : >"$WORK/drift.log"
+  RETOC_OK=1
+  ( IFS=,; for filt in $OWNED; do
+      "$RETOC_BIN" -a "$AESARG" to-legacy --version UE5_4 -f "$filt" "$GAME_PAKS" "$LIVELEG" >>"$WORK/drift.log" 2>&1 || exit 1
+    done ) || RETOC_OK=0
+  if [ "$RETOC_OK" -eq 0 ]; then
+    echo "      SKIP retoc could not extract the owned assets from the live cook:"
+    tail -5 "$WORK/drift.log" | sed 's/^/           /'
+    DRIFT=2
+  else
+    NCMP=0; NDRIFT=0
+    while IFS= read -r rel; do
+      a="$SRCTREE/$rel"; b="$LIVELEG/ForeverWinter/$rel"
+      [ -f "$a" ] || continue
+      if [ ! -f "$b" ]; then
+        echo "      DRIFT $(basename "$rel") -- present in the build tree, ABSENT from the live cook"
+        NDRIFT=$((NDRIFT + 1)); continue
+      fi
+      NCMP=$((NCMP + 1))
+      if ! cmp -s "$a" "$b"; then
+        n=$(cmp -l "$a" "$b" 2>/dev/null | wc -l)
+        sa=$(stat -c%s "$a"); sb=$(stat -c%s "$b")
+        note="same length"
+        [ "$sa" != "$sb" ] && note="$sa -> $sb bytes"
+        echo "      DRIFT $(basename "$rel")  $n byte(s) differ ($note)"
+        NDRIFT=$((NDRIFT + 1))
+      fi
+    done <<'RELS'
+Content/FW/Player/Class/BP_Player_BagMan.uasset
+Content/FW/Player/Class/BP_Player_BagMan.uexp
+Content/FW/Player/Class/BP_Player_Girl.uasset
+Content/FW/Player/Class/BP_Player_Girl.uexp
+Content/FW/Player/Class/BP_Player_Gunhead.uasset
+Content/FW/Player/Class/BP_Player_Gunhead.uexp
+Content/FW/Player/Class/BP_Player_MaskMan.uasset
+Content/FW/Player/Class/BP_Player_MaskMan.uexp
+Content/FW/Player/Class/BP_Player_OldMan.uasset
+Content/FW/Player/Class/BP_Player_OldMan.uexp
+Content/FW/Player/Class/BP_Player_Shaman.uasset
+Content/FW/Player/Class/BP_Player_Shaman.uexp
+Content/FW/Player/Data/DT_SkinUIData.uasset
+Content/FW/Player/Data/DT_SkinUIData.uexp
+RELS
+    rm -rf "$LIVELEG"
+    if [ "$NCMP" -eq 0 ]; then
+      echo "      SKIP compared 0 files -- the build tree holds none of the expected assets."
+      DRIFT=2
+    elif [ "$NDRIFT" -eq 0 ]; then
+      echo "      OK   $NCMP file(s) byte-identical to the live cook -- the pak was built on THIS cook"
+    else
+      echo "      $NDRIFT of $NCMP file(s) have drifted. The pak was built on an older cook, so it"
+      echo "      serves stale bytes for the values above. Not a break; a rebuild is owed:"
+      echo "         python tools/cmsf_framework.py --slots 32"
+      DRIFT=1
+    fi
+  fi
+fi
+
 echo
 if [ "$NORUN" -ne 0 ]; then
   echo "RESULT: THE CHECK DID NOT RUN for at least one pak (see above). This is not a pass."
@@ -435,5 +555,17 @@ if [ "$FAIL" -ne 0 ]; then
   echo "RESULT: FAILURES ABOVE"
   exit 1
 fi
+if [ "$DRIFT" -eq 1 ]; then
+  echo "RESULT: no breakage - 0 dangling soft references, 0 base rows or soft paths dropped,"
+  echo "        CMSF namespace vacant - BUT THE COOK HAS DRIFTED (check 5). A rebuild is owed"
+  echo "        before this ships: python tools/cmsf_framework.py --slots 32"
+  exit 0
+fi
+if [ "$DRIFT" -eq 2 ]; then
+  echo "RESULT: clean on checks 1-4 - 0 dangling soft references, 0 base rows or soft paths"
+  echo "        dropped, CMSF namespace vacant. CHECK 5 DID NOT RUN (reason above), so this"
+  echo "        says nothing about whether the pak was built on the current cook."
+  exit 0
+fi
 echo "RESULT: clean - 0 dangling soft references, 0 base rows or soft paths dropped,"
-echo "        CMSF namespace vacant in the live build"
+echo "        CMSF namespace vacant, and the pak was built on the live cook"
