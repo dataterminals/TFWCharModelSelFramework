@@ -531,6 +531,35 @@ Content/FW/Player/Class/BP_Player_Shaman.uexp
 Content/FW/Player/Data/DT_SkinUIData.uasset
 Content/FW/Player/Data/DT_SkinUIData.uexp
 RELS
+
+    # ---------------------------------------------------------------------------------------
+    # Script-object exposure. The byte comparison above says the cook MOVED; this says whether
+    # the movement can actually break a pak, which is a different and much narrower question.
+    #
+    # A zen container's script imports are hashes of object PATH NAMES resolved through the
+    # global ScriptObjects chunk, so appending symbols is harmless and a pak breaks only if it
+    # imports a name that was REMOVED or RENAMED. Measured on 25071553: the store grew 5,258
+    # bytes, 78 names were added and exactly TWO were removed. Reporting the size delta would
+    # have condemned every pre-patch pak in the collection; reporting removals condemns almost
+    # none. See tools/scriptobjects_diff.py for the full reasoning and the format.
+    #
+    # retoc drops scriptobjects.bin at the root of a to-legacy output, so both sides are already
+    # on disk here for free -- the build tree's copy is a fingerprint of the cook the pak was
+    # packed against.
+    SO_SRC="$REPO/build/framework/src/scriptobjects.bin"
+    SO_LIVE="$LIVELEG/scriptobjects.bin"
+    if [ -f "$SO_SRC" ] && [ -f "$SO_LIVE" ]; then
+      echo "      --- script-object exposure ---"
+      "$PY" "$REPO/tools/scriptobjects_diff.py" "$SO_SRC" "$SO_LIVE"             --refs "$REPO/build/framework/stage" 2>&1 | sed 's/^/  /'
+      so_rc=${PIPESTATUS[0]}
+      # exit 1 is real exposure: a shipped asset imports a symbol the live build no longer has.
+      # exit 2 means the format changed and the check could not run -- never a pass.
+      [ "$so_rc" -eq 1 ] && FAIL=1
+      [ "$so_rc" -eq 2 ] && NORUN=1
+    else
+      echo "      --- script-object exposure: SKIP (no scriptobjects.bin on one side) ---"
+    fi
+
     rm -rf "$LIVELEG"
     if [ "$NCMP" -eq 0 ]; then
       echo "      SKIP compared 0 files -- the build tree holds none of the expected assets."
