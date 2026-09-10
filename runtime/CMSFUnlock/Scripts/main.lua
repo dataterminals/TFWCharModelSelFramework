@@ -733,6 +733,79 @@ RegisterConsoleCommandHandler("cmsfprune", function()
     return true
 end)
 
+-- ---------------------------------------------------------------------------------------
+-- P1 PROBE — the skin-select BUTTON, which is a different gate from this mod's filter.
+--
+-- Measured 2026-09-10 on 25071553. Three things were being conflated as "the skin menu is
+-- missing", and they need different fixes:
+--
+--   1. the WBP_SkinSelection_C PANEL      — always constructed, for all four ready-room slots
+--   2. the WBP_SkinSelectButton_C BUTTON  — gated; this is what a player actually sees missing
+--   3. SelectLockedSkinsOnly              — decides what an OPEN panel lists. THE ONLY ONE THIS
+--                                           MOD HAS EVER TOUCHED.
+--
+-- The gate on 2 is ownership: a character with |owned intersect LockedSkinChoices| == 0 gets no
+-- button. Old Man is the case in the wild — his two entries are ThunderdomeWin (earned by
+-- beating the Water Thief, not sold) and OldMan.Ber, so an account that has bought every skin
+-- pack still has none of his.
+--
+-- WHY THIS IS EVEN WORTH TRYING. The button is not absent, it is COLLAPSED: the instance inside
+-- WBP_PlayerStatusWidget is authored `Visibility: ESlateVisibility::Collapsed` and something at
+-- runtime un-collapses it. A collapsed widget that already exists is exactly what SetVisibility
+-- reaches, and this mod has been doing that write to skin TILES since v0.1 without incident.
+--
+-- WHY VIS_DEFAULT AND NOT Visible(0). SelfHitTestInvisible makes the wrapper transparent to hit
+-- testing while its children still take clicks, and the child here is the actual UButton. That
+-- is the same value the clickable tiles use, so it is the field-tested one; 0 is the fallback if
+-- the button turns out to be visible-but-dead.
+--
+-- THIS IS A PROBE, NOT THE FIX, and it is deliberately manual. It reports before it writes so a
+-- run is informative even if the write achieves nothing, and it is NOT wired into the poll:
+-- un-collapsing a control the game deliberately hid is not something to do once per second on
+-- every panel until it is known to be safe and to actually open a working menu.
+local BUTTON = "WBP_SkinSelectButton_C"
+
+RegisterConsoleCommandHandler("cmsfbutton", function()
+    ExecuteInGameThread(function()
+        local found = FindAllOf(BUTTON)
+        if not found then
+            log("cmsfbutton: no " .. BUTTON .. " in memory — stand in the ready room and retry")
+            return
+        end
+        local seen, changed, already = 0, 0, 0
+        for _, b in pairs(found) do
+            if b:IsValid() then
+                seen = seen + 1
+                local nm, vis
+                pcall(function() nm = tostr(b:GetFullName()) end)
+                pcall(function() vis = b.Visibility end)
+                local live = isLiveInstance(b)
+                log(string.format("  [%s] vis=%s  %s",
+                    live and "live" or "template", tostring(vis), tostring(nm)))
+                -- The template is left alone. A cleared flag on it is inherited by future
+                -- instances, which is welcome for the filter but NOT for a control the game
+                -- hides per character: it would leak the button onto characters that legitimately
+                -- have no skins, on every panel built afterwards.
+                if live then
+                    if vis == VIS_DEFAULT then
+                        already = already + 1
+                    elseif pcall(function() b:SetVisibility(VIS_DEFAULT) end) then
+                        changed = changed + 1
+                    end
+                end
+            end
+        end
+        log(string.format("cmsfbutton: %d button(s) found, %d already shown, %d un-collapsed",
+            seen, already, changed))
+        if changed > 0 then
+            log("  now click it. If the panel opens, P1's fix is a visibility write and nothing more.")
+            log("  If it opens EMPTY, run `cmsfunlock` — the filter is the second gate.")
+        end
+    end)
+    return true
+end)
+
 log("v" .. VERSION .. " loaded — selector will list every skin, and unclaimed CMSF slots are hidden.")
 log("  `cmsfunlock` force + report   `cmsfoff` disable")
 log("  `cmsfnoprune` / `cmsfprune` toggle tile pruning — the A/B for the stutter")
+log("  `cmsfbutton` P1 probe — report and un-collapse the skin-select button")
