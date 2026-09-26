@@ -63,9 +63,17 @@ Plus `CMSFUnlock` (the runtime, below).
 
 ### The author's pak — one per skin
 
-Exactly three packages at the slot's frozen paths, at a higher load order:
+Three packages at the slot's frozen paths, at a higher load order:
 `SK_CMSF_<Char>_<NN>`, `T_CMSF_<Char>_<NN>`, `ST_CMSF_<Char>_<NN>`. Higher load order wins all
 three together, so a skin arrives coherently or not at all — never a name without its mesh.
+
+**Plus, optionally, the author's own cooked materials and textures** (added 2026-09-26), shipped
+*inside* the same slot directory: `/Game/CMSF/<Char>/<NN>/**`. This does not weaken the
+composability argument, because the slot directory is already the claimant's: nothing else ever
+ships under it, so an author's `Materials/M_Skin` cannot meet anyone else's. Every reference
+between shipped packages (the mesh's material import, the material's texture import) is
+repointed into the slot at build time, using the identity rule applied to the referenced path
+instead of the package's own.
 
 Authors never ship `DT_SkinUIData` or `BP_Player_*` — that is what makes two CMSF skins coexist.
 `skin.json` is a build-time input and never ships; the user installs pak trios only, no manifest,

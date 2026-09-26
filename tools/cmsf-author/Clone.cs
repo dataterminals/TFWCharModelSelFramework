@@ -2,9 +2,10 @@
 //
 // Both were standalone exes because cmsf_author.py had to shell out to reach them. Inside a
 // single tool they are just functions, which is why the shipped author bundle is
-// cmsf-author.exe + retoc.exe rather than four executables.
+// cmsf-author.exe + retoc.exe rather than four executables. tools/mshgen now links this file
+// and Identity.cs, so the Python reference and the exe clone packages with the same code.
 //
-// The originals stay in the repo: tools/cmsf_framework.py still drives them, and the
+// The originals stay in the repo: tools/cmsf_framework.py still drives stgen, and the
 // framework generator is run by the maintainer from a clone, so it has no reason to move.
 using UAssetAPI;
 using UAssetAPI.ExportTypes;
@@ -13,23 +14,40 @@ using UAssetAPI.Unversioned;
 
 static class Clone
 {
+    // Payload files that travel beside a cooked .uasset/.uexp. UAssetAPI rewrites the .uasset
+    // and .uexp but never touches these, and a texture with its mips in .ubulk that loses the
+    // file still packs, still verifies, and then loads as nothing.
+    static readonly string[] Payloads = { ".ubulk", ".uptnl", ".m.ubulk" };
+
     /// <summary>
     /// Clone any cooked package to a slot path under a new identity — was tools/mshgen.
     /// Package-generic despite the old name: it needs only an export matching the file stem,
-    /// so a SkeletalMesh and a Texture2D clone identically.
+    /// so a SkeletalMesh, a MaterialInstance and a Texture2D clone identically.
+    /// <paramref name="relink"/> maps the old paths of every package shipping alongside to
+    /// their slot paths, so references between them survive the move.
     /// </summary>
-    public static void Package(string inPath, Usmap mappings, string outPath, string newName)
+    public static Identity.Result Package(string inPath, Usmap mappings, string outPath, string newName,
+                                          IReadOnlyDictionary<string, string> relink = null)
     {
         string tplStem = Path.GetFileNameWithoutExtension(inPath);
         var asset = new UAsset(inPath, EngineVersion.VER_UE5_4, mappings);
         int importsBefore = asset.Imports.Count;
 
         var id = Identity.Rewrite(asset, tplStem, newName, outPath);
+        if (relink != null) Identity.Relink(asset, relink);
 
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(outPath)));
+        foreach (var ext in Payloads) File.Delete(Payload(outPath, ext));
         asset.Write(outPath);
+        foreach (var ext in Payloads)
+        {
+            // Bulk offsets are relative to the file, so the payload is copied as-is under the
+            // new stem; to-zen then files it as that package's BulkData chunk.
+            string from = Payload(inPath, ext), to = Payload(outPath, ext);
+            if (File.Exists(from) && !File.Exists(to)) File.Copy(from, to);
+        }
 
-        Identity.VerifyWritten(outPath, mappings, id, newName);
+        Identity.VerifyWritten(outPath, mappings, id, newName, relink);
 
         // The imports are what make a mesh actually render; losing them produces a package
         // that loads and shows nothing.
@@ -37,7 +55,11 @@ static class Clone
         if (back.Imports.Count != importsBefore)
             throw new BuildError(
                 $"{Path.GetFileName(outPath)}: import table changed ({importsBefore} -> {back.Imports.Count})");
+        return id;
     }
+
+    static string Payload(string uasset, string ext) =>
+        Path.Combine(Path.GetDirectoryName(Path.GetFullPath(uasset)), Path.GetFileNameWithoutExtension(uasset) + ext);
 
     /// <summary>
     /// Generate a CMSF string table by cloning the game's own ST_FW_UI_Skins — was

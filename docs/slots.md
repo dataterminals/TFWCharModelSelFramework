@@ -1,7 +1,7 @@
 # CMSF slot registry
 
 A CMSF skin claims one slot, `<Char>/<NN>`, and ships three packages at that slot's frozen
-paths. Two skins claiming the same slot is the one failure this framework does not solve on
+paths, plus any of its own materials and textures inside the same slot directory. Two skins claiming the same slot is the one failure this framework does not solve on
 its own: the higher load order wins and the other is simply invisible — the exact failure
 mode CMSF exists to replace. This file is how authors avoid it.
 

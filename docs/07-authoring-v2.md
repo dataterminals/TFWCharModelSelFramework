@@ -18,28 +18,35 @@ character selector. You bring:
 
 - a **cooked skeletal mesh** (`.uasset`) that shares the target character's skeleton
 - a **cooked portrait texture** (`.uasset`)
+- *optionally*, your **own cooked materials and textures**, if the mesh uses them. See
+  [Your own materials and textures](#your-own-materials-and-textures).
 
 How you produce those is the same problem as any UE5.4 asset mod and is out of scope here.
 The one rule worth repeating from [04-authoring.md](04-authoring.md#gotchas): a mesh
 referencing a different skeleton than the character's rig **will load and T-pose**. Share the
-character's skeleton.
+character's skeleton. Mind which one: the game ships two side by side. Scav Girl and the other
+base characters use `GenericHumanoid_Skeleton`, while Shaman uses
+`GenericHumanoid_Skeleton_MainCharacters`. A mesh on the wrong one of the pair doesn't T-pose;
+it animates *almost* right, with a stretched neck and a gun that points the wrong way, which is
+harder to spot.
 
 If you only want to surface a skin the game already ships but never wired up, you do not need
 to cook anything — point `skin.json` at the existing `/Game/` path and CMSF clones it.
 
 ## What you ship
 
-Exactly three packages, at the frozen paths of the one slot you claim:
+Three packages, at the frozen paths of the one slot you claim:
 
 ```
 /Game/CMSF/<Char>/<NN>/SK_CMSF_<Char>_<NN>     your mesh
 /Game/CMSF/<Char>/<NN>/T_CMSF_<Char>_<NN>      your portrait
 /Game/CMSF/<Char>/<NN>/ST_CMSF_<Char>_<NN>     your name and description
+/Game/CMSF/<Char>/<NN>/…                       your own materials/textures, if any
 ```
 
-and nothing else. **Never `DT_SkinUIData`, never `BP_Player_*`.** That is what makes two CMSF
-skins coexist instead of clobbering each other, and `cmsf-author` fails the build if anything
-outside the slot directory appears — you do not have to remember it.
+and nothing outside that directory. **Never `DT_SkinUIData`, never `BP_Player_*`.** That is
+what makes two CMSF skins coexist instead of clobbering each other, and `cmsf-author` fails the
+build if anything outside the slot directory appears. You don't have to remember it.
 
 `skin.json` is a build-time input and **never ships**. Your users install a pak trio and
 nothing else: no manifest, no config, no exe.
@@ -108,10 +115,57 @@ not an error.
 | `mesh` | yes | |
 | `description` | no | shown under the name |
 | `id` | no | defaults to the folder name |
+| `assets` | no | your own cooked materials/textures: files or folders in the skin folder. See below |
 
 `mesh` and `icon` each take **either** a `/Game/…` path, which is cloned out of your own
 installed cook, **or** a path relative to the skin folder, which is how you ship your own
 cooked assets.
+
+### Your own materials and textures
+
+If your mesh uses materials or textures you cooked yourself, put their cooked files in the skin
+folder and list them. Folders are taken whole:
+
+```json
+  "mesh": "SK_RedRobe.uasset",
+  "icon": "T_RedRobe_Portrait.uasset",
+  "assets": ["Materials", "Textures"]
+```
+
+```
+skins/red-robe/
+  skin.json
+  SK_RedRobe.uasset  .uexp
+  T_RedRobe_Portrait.uasset  .uexp
+  Materials/MI_RedRobe.uasset  .uexp
+  Textures/T_RedRobe_D.uasset  .uexp  .ubulk
+```
+
+What the tool does with them:
+
+- **They ship inside your slot**, keeping their layout: `Materials/MI_RedRobe` becomes
+  `/Game/CMSF/Girl/07/Materials/MI_RedRobe`. The slot directory is yours alone, so they can't
+  collide with anyone's.
+- **References follow them.** Wherever you cooked them, the mesh's material slot and the
+  material's texture parameters are repointed at the copies in your slot. You don't have to cook
+  at the slot path.
+- **`.ubulk` files travel with their package.** Big textures keep their pixels there. Keep each
+  one beside its `.uasset`.
+- **Anything from the game, you just reference.** A material instance whose parent is the game's
+  `M_FW_Char` is normal; don't list game assets (a `/Game/` path in `assets` is refused).
+- **Only list a physics asset if you made one.** If your mesh points at the game's, leave it.
+  Shipping UE's auto-generated one swaps the character's hit and ragdoll bodies for rough
+  capsules.
+
+The build then checks **every reference in every shipped package**. Each one has to land on
+something your pak ships or something the game already has. Anything else fails the build with
+the name of the missing package, because in game it would load as nothing: a material that
+silently falls back, or a blank mesh. A clean build means nothing is dangling.
+
+One naming limit: the mesh and the portrait get renamed to the slot's names, and Unreal stores a
+name ending in `_<number>` (`Image_0`) as a numbered name that can be moved but not renamed. The
+tool says so if it hits one; rename the asset in Unreal and cook again. Assets in `assets` keep
+their names, so `Textures/Image_0` is fine.
 
 ### 3. Build
 
@@ -216,7 +270,8 @@ pak survive every framework rebuild untouched — when the framework is rebuilt 
 patch, you do nothing.
 
 The corollary: **the slot is baked into your pak.** Moving a skin from the private range to a
-public slot is a rebuild, not a rename.
+public slot is a rebuild, not a rename. That includes your materials and textures: their
+references were repointed at *this* slot's directory.
 
 ## What must not be redistributed
 

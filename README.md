@@ -26,8 +26,9 @@ but no live two-client test has confirmed it.
 is an ordinary pak trio. No exe on the user's side, no manifest, no re-running a generator when
 skins are added. The framework permanently owns `DT_SkinUIData` and `BP_Player_*` and
 pre-provisions numbered slots; an author claims one by shipping three packages at its frozen
-paths — a mesh, a portrait and a string table. Higher load order wins all three together, so a
-skin arrives coherently or not at all.
+paths — a mesh, a portrait and a string table — plus, if the mesh uses them, their own
+materials and textures inside the same slot directory. Higher load order wins them all
+together, so a skin arrives coherently or not at all.
 
 Authors never ship `DT_SkinUIData` or `BP_Player_*`. That is the whole trick, and it is why two
 CMSF skins cannot clobber each other. Authoring guide: [docs/07-authoring-v2.md](docs/07-authoring-v2.md).

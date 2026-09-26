@@ -1,16 +1,19 @@
 #!/usr/bin/env python3
 """CMSF v0.2 author tool — turn one skin into one ordinary pak trio.
 
-An author claims a slot by shipping exactly three packages at that slot's frozen paths, at a
-higher load order than the framework:
+An author claims a slot by shipping three packages at that slot's frozen paths, at a higher
+load order than the framework:
 
     /Game/CMSF/<Char>/<NN>/SK_CMSF_<Char>_<NN>     the mesh
     /Game/CMSF/<Char>/<NN>/T_CMSF_<Char>_<NN>      the portrait
     /Game/CMSF/<Char>/<NN>/ST_CMSF_<Char>_<NN>     the name and description
 
-and nothing else. **Never `DT_SkinUIData`, never `BP_Player_*`** — that is the whole trick,
-and it is why two CMSF skins cannot clobber each other. This tool refuses to emit them, and
-the verify pass fails the build if they appear.
+plus, optionally, their own cooked materials/textures/etc. ("assets"), which ship INSIDE the
+same slot directory, with every reference between shipped packages repointed there. The
+claimant owns the slot directory, so this keeps two skins apart exactly as the frozen three
+do. **Never `DT_SkinUIData`, never `BP_Player_*`, never anything outside the slot** — that is
+the whole trick. This tool refuses to emit them, and the verify pass fails the build if they
+appear.
 
 THE PORTRAIT IS MANDATORY. CMSFUnlock decides a slot is unclaimed by checking whether its
 icon resolves to the slot's own path, so a claim that ships no portrait is not merely ugly —
@@ -29,6 +32,9 @@ skin.json:
       "description": "...",
       "mesh":        "/Game/... .SK_X"    a cooked path to clone, OR a local .uasset
       "icon":        "/Game/... .T_X"     likewise — REQUIRED
+      "assets":      ["Materials", "Textures"]
+                                          optional: your own cooked packages the mesh uses,
+                                          files or folders; they ship inside your slot
     }
 
 A /Game/ value is cloned out of the live cook. Anything else is treated as a path relative
@@ -131,6 +137,56 @@ def resolve_source(value, skin_dir, src, kind):
     return f
 
 
+def resolve_assets(values, skin_dir, reserved, exclude):
+    """skin.json "assets" -> [(source .uasset, path under the slot)]. Folders take every
+    .uasset beneath them; the layout under the skin folder becomes the layout under the slot."""
+    skip = {Path(e).resolve() for e in exclude}
+    seen, found = set(), []
+    for v in values:
+        if not isinstance(v, str):
+            sys.exit('every "assets" entry must be a path in quotes')
+        if v.startswith("/Game/"):
+            sys.exit(f"assets: {v!r} is a game path. Reference game assets from your mesh or "
+                     "material directly - everyone already has them. List only packages you "
+                     "cooked yourself.")
+        full = (skin_dir / v).resolve()
+        if full.is_dir():
+            files = sorted(full.rglob("*.uasset"))
+        elif full.is_file():
+            files = [full]
+        else:
+            sys.exit(f"assets: {full} does not exist")
+        for f in files:
+            if f.suffix != ".uasset":
+                sys.exit(f"assets: expected a .uasset, got {f.name}")
+            try:
+                rel = f.relative_to(skin_dir).as_posix()
+            except ValueError:
+                sys.exit(f"assets: {f} is outside the skin folder. Keep your cooked files inside "
+                         "it - their layout there becomes their layout in the slot.")
+            if f in skip or rel.lower() in seen:
+                continue
+            seen.add(rel.lower())
+            rel = rel[:-len(".uasset")]
+            if rel.lower() in {r.lower() for r in reserved}:
+                sys.exit(f"assets: {rel!r} would overwrite one of the slot's own packages; rename it")
+            found.append((f, rel))
+    return found
+
+
+_in_game = {}
+
+
+def in_game(pkg, probe):
+    """Does the installed game ship this package? One filtered extract, ~0.6 s, cached."""
+    if pkg not in _in_game:
+        subprocess.run([str(c) for c in (RETOC, "-a", fwlocate.aes(), "to-legacy", "--version",
+                                         "UE5_4", "-f", pkg.rsplit("/", 1)[1], PAKS, probe)],
+                       capture_output=True, text=True)
+        _in_game[pkg] = (Path(probe) / game_to_rel(pkg)).is_file()
+    return _in_game[pkg]
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("skin", nargs="?", help="directory containing skin.json")
@@ -212,6 +268,9 @@ def main():
         sys.exit("skin.json needs an \"icon\". A claim with no portrait is HIDDEN, not just "
                  "plain: CMSFUnlock treats an icon that does not resolve to the slot's own "
                  "path as proof the slot is unclaimed, and prunes the tile.")
+    asset_values = skin.get("assets", [])
+    if not isinstance(asset_values, list):
+        sys.exit('"assets" must be a list of files or folders, e.g. ["Materials", "Textures"]')
 
     # All input is validated; only now locate the toolchain (--list-free needs none of it).
     global RETOC, USMAP, PAKS
@@ -243,15 +302,43 @@ def main():
     print("==> resolving sources")
     mesh_src = resolve_source(mesh_src_v, skin_dir, src, "mesh")
     icon_src = resolve_source(icon_src_v, skin_dir, src, "icon")
+    extras = resolve_assets(asset_values, skin_dir, (mesh_obj, tex_obj, st_obj), (mesh_src, icon_src))
     print(f"      mesh  {mesh_src.name}")
     print(f"      icon  {icon_src.name}")
+    for _, rel in extras:
+        print(f"      +     {rel}")
+
+    # Where every shipped package claims to live now, and where it lives in the slot. The
+    # mesh's material import, the material's texture import and so on are repointed with this;
+    # without it a shipped material would sit in the slot while the mesh went on loading the
+    # one at the old path (the game's, or nothing).
+    slot_pkg = f"/Game/CMSF/{char}/{slot}"
+    relink = {}
+
+    def claim(f, new_pkg):
+        old = run([mshgen, "--package-path", f, USMAP], quiet=True).strip()
+        if relink.get(old, new_pkg) != new_pkg:
+            sys.exit(f"two of your packages both say they are {old!r} - cook them at different paths")
+        relink[old] = new_pkg
+
+    claim(mesh_src, f"{slot_pkg}/{mesh_obj}")
+    claim(icon_src, f"{slot_pkg}/{tex_obj}")
+    for f, rel in extras:
+        claim(f, f"{slot_pkg}/{rel}")
+    relink_json = build / "relink.json"
+    relink_json.write_text(json.dumps(relink, indent=1), encoding="utf-8")
 
     # mshgen rewrites package identity — both the name-map entry and FolderName. Without
     # that the clone collides by FPackageId and the loader serves it in its template's
     # place, which is the trap that cost an hour in the probe session.
-    print(f"==> cloning to /Game/CMSF/{char}/{slot}/")
-    run([mshgen, mesh_src, USMAP, stage / sd / f"{mesh_obj}.uasset", mesh_obj], quiet=True)
-    run([mshgen, icon_src, USMAP, stage / sd / f"{tex_obj}.uasset", tex_obj], quiet=True)
+    print(f"==> cloning to {slot_pkg}/")
+    run([mshgen, mesh_src, USMAP, stage / sd / f"{mesh_obj}.uasset", mesh_obj,
+         "--relink", relink_json], quiet=True)
+    run([mshgen, icon_src, USMAP, stage / sd / f"{tex_obj}.uasset", tex_obj,
+         "--relink", relink_json], quiet=True)
+    for f, rel in extras:
+        run([mshgen, f, USMAP, stage / sd / f"{rel}.uasset", rel.rsplit("/", 1)[-1],
+             "--relink", relink_json], quiet=True)
 
     # The string table is cloned from the game's own, never from the author's assets.
     st_tpl = src / "ForeverWinter/Content/FW/UI/StringTables/ST_FW_UI_Skins.uasset"
@@ -281,24 +368,53 @@ def main():
             os.link(f, vsrc / f.name)
     for f in out.glob(f"{pak}.*"):
         shutil.copy(f, vsrc / f.name)
-    for filt in (mesh_obj, tex_obj, st_obj, "DT_SkinUIData", f"BP_Player_{char}"):
+    extra_rels = [rel for _, rel in extras]
+    filters = list(dict.fromkeys([mesh_obj, tex_obj, st_obj] + [r.rsplit("/", 1)[-1] for r in extra_rels]))
+    for filt in filters + ["DT_SkinUIData", f"BP_Player_{char}"]:
         run([RETOC, "-a", fwlocate.aes(), "to-legacy", "--version", "UE5_4", "-f", filt, vsrc, vout],
             quiet=True)
 
     problems = []
-    for obj in (mesh_obj, tex_obj, st_obj):
+    for obj in [mesh_obj, tex_obj, st_obj] + extra_rels:
         if not (vout / sd / f"{obj}.uasset").is_file():
             problems.append(f"missing from the pak: {obj}")
-    # The pak must contain ONLY the three slot packages. Anything else — above all
-    # DT_SkinUIData or BP_Player_* — would make two CMSF skins clobber each other.
+    # The pak must contain ONLY the slot's packages: the three plus the author's own assets,
+    # all inside the slot directory. Anything else — above all DT_SkinUIData or BP_Player_* —
+    # would make two CMSF skins clobber each other.
     shipped = sorted(p.relative_to(stage).as_posix()
                      for p in stage.rglob("*.uasset"))
-    allowed = {f"{sd}/{o}.uasset" for o in (mesh_obj, tex_obj, st_obj)}
+    allowed = {f"{sd}/{o}.uasset" for o in [mesh_obj, tex_obj, st_obj] + extra_rels}
     for f in shipped:
         if f not in allowed:
             problems.append(f"pak ships something it must not: {f}")
-    print(f"    mesh={mesh_obj}  icon={tex_obj}  table={st_obj}")
-    print(f"    shipped {len(shipped)} package(s), all inside /Game/CMSF/{char}/{slot}/")
+
+    # Every package reference must land on something: a package this pak ships, or one the
+    # game already has. Anything else is a material that silently falls back, or a mesh that
+    # loads as nothing — clean build, broken skin.
+    ours = {"/Game/" + f[len("ForeverWinter/Content/"):-len(".uasset")] for f in shipped}
+    game_refs, probe = set(), build / "probe"
+    for f in shipped:
+        who = Path(f).stem
+        for imp in run([mshgen, "--imports", stage / f, USMAP], quiet=True).split():
+            if imp in ours:
+                continue
+            if imp.startswith(slot_pkg + "/"):
+                problems.append(f"{who} references {imp} inside your slot, but nothing ships there")
+            elif imp.startswith("/Game/CMSF/"):
+                problems.append(f"{who} references {imp}, which belongs to another CMSF slot")
+            elif not in_game(imp, probe):
+                problems.append(f"{who} references {imp}, which is neither in this pak nor in the "
+                                f'game - it would load as nothing. Add its cooked package to "assets" '
+                                f"in skin.json.")
+            else:
+                game_refs.add(imp)
+
+    print(f"    mesh={mesh_obj}  icon={tex_obj}  table={st_obj}"
+          + (f"  +{len(extra_rels)} asset(s)" if extra_rels else ""))
+    print(f"    shipped {len(shipped)} package(s), all inside {slot_pkg}/")
+    if game_refs:
+        print(f"    uses {len(game_refs)} game package(s): "
+              + ", ".join(g.rsplit("/", 1)[1] for g in sorted(game_refs)))
 
     if problems:
         print("\nVERIFY FAILED:")

@@ -4,22 +4,26 @@
 // accepts .exe and authors should not need Python. The Python remains the reference
 // implementation and still works from a clone; the two are expected to produce the same pak.
 //
-// An author claims a slot by shipping exactly three packages at that slot's frozen paths, at
-// a higher load order than the framework:
+// An author claims a slot by shipping three packages at that slot's frozen paths, at a
+// higher load order than the framework:
 //
 //     /Game/CMSF/<Char>/<NN>/SK_CMSF_<Char>_<NN>     the mesh
 //     /Game/CMSF/<Char>/<NN>/T_CMSF_<Char>_<NN>      the portrait
 //     /Game/CMSF/<Char>/<NN>/ST_CMSF_<Char>_<NN>     the name and description
 //
-// and nothing else. NEVER DT_SkinUIData, NEVER BP_Player_* — that is the whole trick, and it
-// is why two CMSF skins cannot clobber each other. The verify pass fails the build if
-// anything outside the slot directory appears.
+// plus, optionally, their own cooked materials/textures/etc. ("assets" in skin.json), which
+// ship INSIDE the same slot directory — the claimant owns it, so this keeps two skins apart
+// exactly as the frozen three do. Every reference between shipped packages is repointed into
+// the slot. NEVER DT_SkinUIData, NEVER BP_Player_*, never anything outside the slot directory
+// — that is the whole trick, and the verify pass fails the build if it is broken.
 //
 // THE PORTRAIT IS MANDATORY. CMSFUnlock decides a slot is unclaimed by checking whether its
 // icon resolves to the slot's own path, so a claim shipping no portrait is not merely plain —
 // it is pruned, invisible, indistinguishable from not being installed. That is the one
 // authoring mistake that yields a clean build and a missing skin, so it is a hard error here.
 using System.Text.Json;
+using UAssetAPI;
+using UAssetAPI.UnrealTypes;
 using UAssetAPI.Unversioned;
 
 static class Program
@@ -190,6 +194,18 @@ static class Program
             "CMSFUnlock treats an icon that does not resolve to the slot's own path as proof " +
             "the slot is unclaimed, and prunes the tile.");
 
+        // Optional: the author's own cooked packages the mesh needs — materials, textures, a
+        // physics asset. Files or folders, relative to the skin folder.
+        var assetValues = new List<string>();
+        if (root.TryGetProperty("assets", out var av))
+        {
+            if (av.ValueKind != JsonValueKind.Array)
+                throw new BuildError("\"assets\" must be a list of files or folders, e.g. [\"Materials\", \"Textures\"]");
+            foreach (var e in av.EnumerateArray())
+                assetValues.Add(e.ValueKind == JsonValueKind.String ? e.GetString()
+                    : throw new BuildError("every \"assets\" entry must be a path in quotes"));
+        }
+
         // ---- registry ---------------------------------------------------------------------
         // Taking someone else's slot is an error. Building on an unregistered public slot is
         // only a note, so nobody is blocked waiting on a merge to test locally. The private
@@ -252,12 +268,35 @@ static class Program
         Console.WriteLine("==> resolving sources");
         var meshSrc = ResolveSource(meshSrcValue, skinDir, src, paks, "mesh");
         var iconSrc = ResolveSource(iconSrcValue, skinDir, src, paks, "icon");
+        var extras = ResolveAssets(assetValues, skinDir, new[] { meshObj, texObj, stObj }, meshSrc, iconSrc);
         Console.WriteLine($"      mesh  {Path.GetFileName(meshSrc)}");
         Console.WriteLine($"      icon  {Path.GetFileName(iconSrc)}");
+        foreach (var x in extras) Console.WriteLine($"      +     {x.Rel}");
 
-        Console.WriteLine($"==> cloning to /Game/CMSF/{character}/{slot}/");
-        Clone.Package(meshSrc, mappings, Path.Combine(stage, slotDir, meshObj + ".uasset"), meshObj);
-        Clone.Package(iconSrc, mappings, Path.Combine(stage, slotDir, texObj + ".uasset"), texObj);
+        // Where every shipped package claims to live now, and where it lives in the slot. The
+        // mesh's material import, the material's texture import and so on are repointed with
+        // this; without it a shipped material would sit in the slot while the mesh went on
+        // loading the one at the old path (the game's, or nothing).
+        var slotPkg = $"/Game/CMSF/{character}/{slot}";
+        var relink = new Dictionary<string, string>(StringComparer.Ordinal);
+        void Claim(string file, string newPkg)
+        {
+            var old = Identity.PackagePathOf(new UAsset(file, EngineVersion.VER_UE5_4, mappings),
+                                             Path.GetFileNameWithoutExtension(file));
+            if (relink.TryGetValue(old, out var prev) && prev != newPkg)
+                throw new BuildError($"two of your packages both say they are '{old}' — cook them at different paths");
+            relink[old] = newPkg;
+        }
+        Claim(meshSrc, $"{slotPkg}/{meshObj}");
+        Claim(iconSrc, $"{slotPkg}/{texObj}");
+        foreach (var x in extras) Claim(x.Src, $"{slotPkg}/{x.Rel}");
+
+        Console.WriteLine($"==> cloning to {slotPkg}/");
+        Clone.Package(meshSrc, mappings, Path.Combine(stage, slotDir, meshObj + ".uasset"), meshObj, relink);
+        Clone.Package(iconSrc, mappings, Path.Combine(stage, slotDir, texObj + ".uasset"), texObj, relink);
+        foreach (var x in extras)
+            Clone.Package(x.Src, mappings, Path.Combine(stage, slotDir, x.Rel + ".uasset"),
+                          Path.GetFileName(x.Rel), relink);
 
         // The string table is cloned from the game's own, never from the author's assets.
         var stTpl = Path.Combine(src, "ForeverWinter/Content/FW/UI/StringTables/ST_FW_UI_Skins.uasset");
@@ -272,7 +311,8 @@ static class Program
         long size = Directory.GetFiles(outDir, pak + ".*").Sum(f => new FileInfo(f).Length);
         Console.WriteLine($"    {pak}   {size / 1024.0 / 1024.0:F2} MB");
 
-        Verify(build, outDir, stage, paks, pak, slotDir, character, meshObj, texObj, stObj);
+        Verify(build, outDir, stage, paks, pak, slotDir, character, mappings,
+               extras.Select(x => x.Rel).ToList(), meshObj, texObj, stObj);
 
         Console.WriteLine($"\ndone -> {outDir}\n");
         Console.WriteLine($"Install alongside the framework. This pak MUST load ABOVE it " +
@@ -302,11 +342,52 @@ static class Program
         return local;
     }
 
-    /// <summary>Decode the built pak back out and prove it holds the three slot packages and
-    /// nothing else. "Authors never ship DT_SkinUIData or BP_Player_*" is enforced here rather
-    /// than remembered.</summary>
+    /// <summary>
+    /// Expand skin.json "assets" into (source file, path under the slot). Folders take every
+    /// .uasset beneath them; the layout under the skin folder becomes the layout under the
+    /// slot, so Materials/M_X.uasset ships as /Game/CMSF/Char/NN/Materials/M_X.
+    /// </summary>
+    static List<(string Src, string Rel)> ResolveAssets(List<string> values, string skinDir,
+                                                        string[] reserved, params string[] exclude)
+    {
+        var skip = exclude.Select(Path.GetFullPath).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var found = new List<(string, string)>();
+        foreach (var v in values)
+        {
+            if (v.StartsWith("/Game/", StringComparison.Ordinal))
+                throw new BuildError(
+                    $"assets: '{v}' is a game path. Reference game assets from your mesh or material " +
+                    "directly — everyone already has them. List only packages you cooked yourself.");
+            var full = Path.GetFullPath(Path.Combine(skinDir, v));
+            var files = Directory.Exists(full) ? Directory.GetFiles(full, "*.uasset", SearchOption.AllDirectories)
+                      : File.Exists(full) ? new[] { full }
+                      : throw new BuildError($"assets: {full} does not exist");
+            foreach (var f in files.OrderBy(f => f, StringComparer.Ordinal))
+            {
+                if (Path.GetExtension(f) != ".uasset")
+                    throw new BuildError($"assets: expected a .uasset, got {Path.GetFileName(f)}");
+                var rel = Path.GetRelativePath(skinDir, f).Replace('\\', '/');
+                if (rel.StartsWith("../", StringComparison.Ordinal) || Path.IsPathRooted(rel))
+                    throw new BuildError($"assets: {f} is outside the skin folder. Keep your cooked files " +
+                                         "inside it — their layout there becomes their layout in the slot.");
+                if (skip.Contains(Path.GetFullPath(f)) || !seen.Add(rel)) continue;
+                rel = rel[..^".uasset".Length];
+                if (reserved.Contains(rel, StringComparer.OrdinalIgnoreCase))
+                    throw new BuildError($"assets: '{rel}' would overwrite one of the slot's own packages; rename it");
+                found.Add((Path.GetFullPath(f), rel));
+            }
+        }
+        return found;
+    }
+
+    /// <summary>Decode the built pak back out and prove it holds the slot packages and
+    /// nothing else, and that nothing in it points at a package that will not be there.
+    /// "Authors never ship DT_SkinUIData or BP_Player_*" is enforced here rather than
+    /// remembered.</summary>
     static void Verify(string build, string outDir, string stage, string paks, string pak,
-                       string slotDir, string character, params string[] objects)
+                       string slotDir, string character, Usmap mappings, List<string> extras,
+                       params string[] objects)
     {
         Console.WriteLine("==> verifying (decode the built pak back out)");
         var vsrc = Path.Combine(build, "vsrc");
@@ -325,13 +406,16 @@ static class Program
         foreach (var f in Directory.GetFiles(outDir, pak + ".*"))
             File.Copy(f, Path.Combine(vsrc, Path.GetFileName(f)), true);
 
-        foreach (var filter in objects.Concat(new[] { "DT_SkinUIData", $"BP_Player_{character}" }))
+        var extraNames = extras.Select(r => r.Split('/').Last());
+        foreach (var filter in objects.Concat(extraNames).Distinct()
+                                      .Concat(new[] { "DT_SkinUIData", $"BP_Player_{character}" }))
             Retoc.ToLegacy(filter, vsrc, vout);
 
         var problems = new List<string>();
-        foreach (var obj in objects)
-            if (!File.Exists(Path.Combine(vout, slotDir.Replace('/', Path.DirectorySeparatorChar), obj + ".uasset")))
-                problems.Add($"missing from the pak: {obj}");
+        foreach (var rel in objects.Concat(extras))
+            if (!File.Exists(Path.Combine(vout, slotDir.Replace('/', Path.DirectorySeparatorChar),
+                                          rel.Replace('/', Path.DirectorySeparatorChar) + ".uasset")))
+                problems.Add($"missing from the pak: {rel}");
 
         // Nothing but our pak is mounted, so either of these appearing means we shipped it —
         // and shipping either is what makes two CMSF skins clobber each other.
@@ -339,18 +423,62 @@ static class Program
             if (Directory.EnumerateFiles(vout, forbidden + ".uasset", SearchOption.AllDirectories).Any())
                 problems.Add($"pak ships {forbidden}, which authors must never own");
 
-        var allowed = objects.Select(o => $"{slotDir}/{o}.uasset").ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var allowed = objects.Concat(extras).Select(o => $"{slotDir}/{o}.uasset").ToHashSet(StringComparer.OrdinalIgnoreCase);
         var shipped = Directory.GetFiles(stage, "*.uasset", SearchOption.AllDirectories)
             .Select(p => Path.GetRelativePath(stage, p).Replace('\\', '/'))
             .OrderBy(p => p, StringComparer.Ordinal).ToList();
         foreach (var f in shipped)
             if (!allowed.Contains(f)) problems.Add($"pak ships something it must not: {f}");
 
-        Console.WriteLine($"    mesh={objects[0]}  icon={objects[1]}  table={objects[2]}");
-        Console.WriteLine($"    shipped {shipped.Count} package(s), all inside /Game/{slotDir["ForeverWinter/Content/".Length..]}/");
+        // Every package reference must land on something: a package this pak ships, or one the
+        // game already has. Anything else is a material that silently falls back, or a mesh
+        // that loads as nothing — clean build, broken skin. Checked on the staged packages,
+        // whose name maps are what to-zen turns into import IDs.
+        var slotPkg = "/Game/" + slotDir["ForeverWinter/Content/".Length..];
+        var ours = shipped.Select(f => "/Game/" + f["ForeverWinter/Content/".Length..^".uasset".Length])
+                          .ToHashSet(StringComparer.Ordinal);
+        var gameRefs = new SortedSet<string>(StringComparer.Ordinal);
+        var probe = Path.Combine(build, "probe");
+        foreach (var f in shipped)
+        {
+            var a = new UAsset(Path.Combine(stage, f), EngineVersion.VER_UE5_4, mappings);
+            var who = Path.GetFileNameWithoutExtension(f);
+            foreach (var imp in Identity.PackageImports(a))
+            {
+                if (ours.Contains(imp)) continue;
+                if (imp.StartsWith(slotPkg + "/", StringComparison.Ordinal))
+                    problems.Add($"{who} references {imp} inside your slot, but nothing ships there");
+                else if (imp.StartsWith("/Game/CMSF/", StringComparison.Ordinal))
+                    problems.Add($"{who} references {imp}, which belongs to another CMSF slot");
+                else if (!InGame(imp, paks, probe))
+                    problems.Add($"{who} references {imp}, which is neither in this pak nor in the game — " +
+                                 "it would load as nothing. Add its cooked package to \"assets\" in skin.json.");
+                else gameRefs.Add(imp);
+            }
+        }
+
+        Console.WriteLine($"    mesh={objects[0]}  icon={objects[1]}  table={objects[2]}" +
+                          (extras.Count > 0 ? $"  +{extras.Count} asset(s)" : ""));
+        Console.WriteLine($"    shipped {shipped.Count} package(s), all inside {slotPkg}/");
+        if (gameRefs.Count > 0)
+            Console.WriteLine($"    uses {gameRefs.Count} game package(s): " +
+                              string.Join(", ", gameRefs.Select(g => g.Split('/').Last())));
 
         if (problems.Count > 0)
             throw new BuildError("VERIFY FAILED:\n  " + string.Join("\n  ", problems));
+    }
+
+    static readonly Dictionary<string, bool> inGame = new(StringComparer.Ordinal);
+
+    /// <summary>Does the installed game ship this package? One filtered extract, ~0.6 s, cached.</summary>
+    static bool InGame(string pkg, string paks, string probe)
+    {
+        if (inGame.TryGetValue(pkg, out var known)) return known;
+        try { Retoc.ToLegacy(pkg.Split('/').Last(), paks, probe); }
+        catch (BuildError) { /* nothing matched is an answer, not a failure */ }
+        var f = Path.Combine(probe, "ForeverWinter", "Content",
+                             pkg["/Game/".Length..].Replace('/', Path.DirectorySeparatorChar) + ".uasset");
+        return inGame[pkg] = File.Exists(f);
     }
 
     static void Usage() => Console.WriteLine("""
@@ -376,7 +504,10 @@ static class Program
           { "character": "Girl", "slot": "00", "name": "Octogirl",
             "description": "...",
             "mesh": "/Game/... .SK_X",   a cooked path to clone, OR a local .uasset
-            "icon": "/Game/... .T_X"     likewise — REQUIRED, a claim with no portrait is hidden
+            "icon": "/Game/... .T_X",    likewise — REQUIRED, a claim with no portrait is hidden
+            "assets": ["Materials", "Textures"]
+                                         optional: your own cooked packages the mesh uses,
+                                         files or folders; they ship inside your slot
           }
         """);
 
