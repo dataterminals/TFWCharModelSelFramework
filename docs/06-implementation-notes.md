@@ -58,6 +58,25 @@ came from us.
 **`skinpatch` does not create its output directory; `stgen`/`mshgen` do.** Create the parent
 before calling `skinpatch`.
 
+**`to-zen` is not byte-deterministic.** Packing the same staged tree twice gives a `.ucas` and a
+`.utoc` that differ run to run: 1,151 of 26 MB in one measurement on 2026-09-26, with the same
+container ID and identical packages when decoded back. The chunk layout moves; the content
+doesn't. So to prove two builds agree (Python vs the exe, a release binary vs a dev build),
+compare the **staged legacy packages** or the decoded output, never the pak bytes. A matching
+`.ucas` once is luck, not a property.
+
+**A cooked package's own path may exist only in `FolderName`.** Unreal splits a trailing
+`_<digits>` off a name and stores it as a number (`Image_0` becomes `Image` plus number 1), and a
+cooked texture typically has no self-reference in its name map anyway. Identity therefore comes
+from `FolderName` first, which is also what `to-zen` hashes into the `FPackageId`. Any rewrite of a
+path has to match the split form as well as the whole string (`Identity.RenamePath`). A numbered
+name can be *moved* keeping its leaf, but not *renamed*, because the number lives on every
+reference, not in the string.
+
+**UAssetAPI never touches `.ubulk` / `.uptnl`.** It rewrites `.uasset` + `.uexp` only, so a clone
+must carry the payload files across itself (`Clone.Package` does). A texture that loses its
+`.ubulk` still packs and still verifies, then loads as nothing.
+
 ## Possible extension — a default portrait in the author's pak
 
 Today an author who omits `icon` in `skin.json` gets a hard error, because a claim with no

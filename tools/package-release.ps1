@@ -40,17 +40,25 @@
 .PARAMETER OutDir
     Where to write staging folders and zips. Defaults to dist\release.
 
+.PARAMETER AuthorOnly
+    Build only the author bundle. For a release that changes cmsf-author and nothing a player
+    installs: re-labelling an unchanged framework zip with a new version would read as an
+    update to players when there is none.
+
 .EXAMPLE
     .\tools\package-release.ps1
 .EXAMPLE
     .\tools\package-release.ps1 -Version 0.2.3 -Retoc "D:\tools\retoc\retoc.exe"
+.EXAMPLE
+    .\tools\package-release.ps1 -Version 0.3.1 -AuthorOnly
 #>
 [CmdletBinding()]
 param(
     [string]$Retoc,
     [string]$Framework,
-    [string]$Version = "0.3.0",
-    [string]$OutDir
+    [string]$Version = "0.3.1",
+    [string]$OutDir,
+    [switch]$AuthorOnly
 )
 
 $ErrorActionPreference = 'Stop'
@@ -158,6 +166,9 @@ function Find-Retoc {
 # =============================================================================================
 #  1. THE PLAYER BUNDLE
 # =============================================================================================
+if ($AuthorOnly) {
+    Write-Host "==> player bundle skipped (-AuthorOnly)" -ForegroundColor DarkGray
+} else {
 Write-Host "==> player bundle" -ForegroundColor Cyan
 
 $userName    = "CMSF-v$Version"
@@ -267,6 +278,7 @@ Set-Content -Path (Join-Path $userStaging "README.txt") -Value $userReadme -Enco
 Test-Bundle -Staging $userStaging -PaksAllowedUnder $relPaks
 New-Zip -Staging $userStaging -Zip $userZip
 Show-Bundle -Staging $userStaging -Zip $userZip
+}
 
 # =============================================================================================
 #  2. THE AUTHOR BUNDLE
@@ -384,6 +396,12 @@ skin.json -- copy example-skin\skin.json and edit:
                   file sitting next to skin.json
     icon          same, and REQUIRED -- a claim with no portrait is not plain,
                   it is invisible
+    assets        optional: your own cooked materials and textures, as files or
+                  folders next to skin.json, e.g. ["Materials", "Textures"].
+                  They ship inside your slot, and the tool repoints your mesh
+                  and materials at them. Keep each .ubulk beside its .uasset.
+                  The build fails if anything your mesh uses is neither in
+                  your pak nor in the game, and names what is missing.
 
 FROM A TERMINAL, if you prefer
 
