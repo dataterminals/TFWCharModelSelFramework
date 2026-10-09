@@ -31,7 +31,9 @@ skin.json:
       "name":        "Octogirl",
       "description": "...",
       "mesh":        "/Game/... .SK_X"    a cooked path to clone, OR a local .uasset
-      "icon":        "/Game/... .T_X"     likewise — REQUIRED
+      "icon":        "portrait.png"       REQUIRED. An image (.png .jpg .bmp .tga) is fitted to
+                                          the game's portrait size; a /Game/ path or a local
+                                          .uasset also works
       "assets":      ["Materials", "Textures"]
                                           optional: your own cooked packages the mesh uses,
                                           files or folders; they ship inside your slot
@@ -68,6 +70,7 @@ PAK_ORDER = 11
 
 # Resolved lazily in main(), after --list-free returns — listing slots needs no toolchain.
 RETOC = USMAP = PAKS = None
+IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".bmp", ".tga")  # must match Portrait.cs
 
 
 def run(cmd, quiet=False):
@@ -301,10 +304,30 @@ def main():
 
     print("==> resolving sources")
     mesh_src = resolve_source(mesh_src_v, skin_dir, src, "mesh")
-    icon_src = resolve_source(icon_src_v, skin_dir, src, "icon")
+    icon_note = None
+    if Path(icon_src_v).suffix.lower() in IMAGE_EXTS:
+        # An image portrait: bake it over a copy of the character's base portrait, with the
+        # exe's own code (Portrait.cs, via mshgen), so both tools ship identical pixels. The
+        # copy lives in the build tree, never in the src cache, which must stay the game's.
+        image = (skin_dir / icon_src_v).resolve()
+        if not image.is_file():
+            sys.exit(f"icon: {image} does not exist")
+        tpl = resolve_source(run([mshgen, "--portrait-template", char], quiet=True).strip(),
+                             skin_dir, src, "icon template")
+        pdir = build / "portrait"
+        if pdir.exists():
+            shutil.rmtree(pdir)
+        pdir.mkdir(parents=True)
+        icon_src = pdir / tpl.name
+        shutil.copy(tpl, icon_src)
+        shutil.copy(tpl.with_suffix(".uexp"), icon_src.with_suffix(".uexp"))
+        icon_note = run([mshgen, "--bake-portrait", image, icon_src], quiet=True).strip()
+    else:
+        icon_src = resolve_source(icon_src_v, skin_dir, src, "icon")
     extras = resolve_assets(asset_values, skin_dir, (mesh_obj, tex_obj, st_obj), (mesh_src, icon_src))
     print(f"      mesh  {mesh_src.name}")
-    print(f"      icon  {icon_src.name}")
+    print(f"      icon  {icon_src.name}" if icon_note is None else
+          f"      icon  {icon_src_v}, baked into {icon_src.stem} ({icon_note})")
     for _, rel in extras:
         print(f"      +     {rel}")
 
@@ -415,6 +438,11 @@ def main():
     if game_refs:
         print(f"    uses {len(game_refs)} game package(s): "
               + ", ".join(g.rsplit("/", 1)[1] for g in sorted(game_refs)))
+
+    skel = run([mshgen, "--skeleton-warning", stage / sd / f"{mesh_obj}.uasset", USMAP, char],
+               quiet=True).strip()
+    if skel:
+        print(f"\n    WARNING  {skel}")
 
     if problems:
         print("\nVERIFY FAILED:")

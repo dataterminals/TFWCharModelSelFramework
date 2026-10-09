@@ -314,8 +314,8 @@ Copy-Item $retocLicense (Join-Path $authStaging "licenses\retoc-LICENSE.txt")
 # UAssetAPI.dll / Newtonsoft.Json.dll / ZstdSharp.dll -- a Nexus reviewer asked about exactly that
 # on 2026-07-26, reasonably, having seen the package references in the source.
 #
-# It also means this bundle REDISTRIBUTES all three. Every one is MIT, and MIT requires the notice
-# to travel with the copies -- so the notices ship here even though the code is invisible inside
+# It also means this bundle REDISTRIBUTES all of them. Each is MIT (StbImageSharp: public domain or
+# MIT, used as public domain), and MIT requires the notice to travel with the copies -- so the notices ship here even though the code is invisible inside
 # the exe. Missing them is the same omission the retoc LICENSE check above exists to prevent, and
 # it went unnoticed until that Nexus question prompted a look.
 #
@@ -327,6 +327,7 @@ $thirdParty = [ordered]@{
     'UAssetAPI-LICENSE.txt'        = 'UAssetAPI (MIT) -- compiled into cmsf-author.exe'
     'Newtonsoft.Json-LICENSE.txt'  = 'Newtonsoft.Json (MIT) -- transitive, compiled into cmsf-author.exe'
     'ZstdSharp-LICENSE.txt'        = 'ZstdSharp.Port (MIT) -- transitive, compiled into cmsf-author.exe'
+    'StbImageSharp-LICENSE.txt'    = 'StbImageSharp (public domain or MIT) -- image portraits, compiled into cmsf-author.exe'
 }
 foreach ($name in $thirdParty.Keys) {
     $src = Join-Path $repo "tools\licenses\$name"

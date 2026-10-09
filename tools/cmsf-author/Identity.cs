@@ -17,6 +17,8 @@
 // applied to someone else's path, so it lives here too (Relink).
 using System.Text.RegularExpressions;
 using UAssetAPI;
+using UAssetAPI.ExportTypes;
+using UAssetAPI.PropertyTypes.Objects;
 using UAssetAPI.UnrealTypes;
 using UAssetAPI.Unversioned;
 
@@ -148,6 +150,55 @@ static class Identity
     }
 
     /// <summary>Full /Game/ paths of every package this one imports.</summary>
+    /// <summary>
+    /// The package a SkeletalMesh's Skeleton property points at, or null when the package
+    /// holds no SkeletalMesh (or its Skeleton isn't an import). Read from the property itself,
+    /// not guessed from import names: a mesh also imports physics assets and materials.
+    /// </summary>
+    public static string SkeletonOf(UAsset asset)
+    {
+        foreach (var e in asset.Exports.OfType<NormalExport>())
+        {
+            var cls = e.ClassIndex.IsImport() ? e.ClassIndex.ToImport(asset).ObjectName.ToString() : null;
+            if (cls != "SkeletalMesh") continue;
+            var prop = e.Data.OfType<ObjectPropertyData>().FirstOrDefault(p => p.Name.ToString() == "Skeleton");
+            if (prop == null || !prop.Value.IsImport()) return null;
+            var obj = prop.Value.ToImport(asset);
+            return obj.OuterIndex.IsImport() ? obj.OuterIndex.ToImport(asset).ObjectName.ToString() : null;
+        }
+        return null;
+    }
+
+    // Each character's skeleton, measured from every mesh in its BP_Player_<Char> roster on
+    // build 25071553 (the table in docs/07-authoring-v2.md). Not "everyone but Shaman shares
+    // one", as that guide used to say: BagMan is on _MainCharacters too, and Gunhead has his own.
+    static readonly Dictionary<string, string> CharacterSkeleton = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["BagMan"]  = "/Game/Animations/GenericHumanoid/GenericHumanoid_Skeleton_MainCharacters",
+        ["Girl"]    = "/Game/Animations/GenericHumanoid/GenericHumanoid_Skeleton",
+        ["Gunhead"] = "/Game/Character/Scavengers/Gunhead/SK_SCV_GHD_V01_Skeleton",
+        ["MaskMan"] = "/Game/Animations/GenericHumanoid/GenericHumanoid_Skeleton",
+        ["OldMan"]  = "/Game/Animations/GenericHumanoid/GenericHumanoid_Skeleton",
+        ["Shaman"]  = "/Game/Animations/GenericHumanoid/GenericHumanoid_Skeleton_MainCharacters",
+    };
+
+    /// <summary>
+    /// A warning when the mesh is bound to a different skeleton than the character's own, or
+    /// null. A warning, not an error: it builds, and it's the author's call. But the wrong one
+    /// of the two GenericHumanoid skeletons doesn't T-pose. It animates almost right, with a
+    /// stretched neck and a gun pointing off, which is how the first outside author's skin
+    /// shipped before anyone measured it.
+    /// </summary>
+    public static string SkeletonWarning(UAsset mesh, string character)
+    {
+        if (!CharacterSkeleton.TryGetValue(character, out var want)) return null;
+        var got = SkeletonOf(mesh);
+        if (got == null || got.Equals(want, StringComparison.OrdinalIgnoreCase)) return null;
+        return $"your mesh is bound to {got.Split('/').Last()}, but every {character} skin in the game " +
+               $"uses {want.Split('/').Last()}. Expect wrong animation (a T-pose, or a stretched neck and " +
+               "a gun pointing off). Re-import the mesh in Unreal against " + want + ".";
+    }
+
     public static List<string> PackageImports(UAsset asset) =>
         asset.Imports
             .Where(i => i.ClassName?.ToString() == "Package")

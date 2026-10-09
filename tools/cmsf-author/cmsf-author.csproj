@@ -30,6 +30,8 @@
 
   <ItemGroup>
     <PackageReference Include="UAssetAPI" Version="1.1.0" />
+    <!-- Decodes an author's image portrait (Portrait.cs). Pure managed and public domain. -->
+    <PackageReference Include="StbImageSharp" Version="2.27.14" />
   </ItemGroup>
 
   <ItemGroup>

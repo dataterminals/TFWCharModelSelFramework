@@ -17,18 +17,26 @@ description and portrait.
 character selector. You bring:
 
 - a **cooked skeletal mesh** (`.uasset`) that shares the target character's skeleton
-- a **cooked portrait texture** (`.uasset`)
+- a **portrait**: an ordinary image (`.png`, `.jpg`, …), or a cooked texture (`.uasset`).
+  See [Your portrait](#your-portrait)
 - *optionally*, your **own cooked materials and textures**, if the mesh uses them. See
   [Your own materials and textures](#your-own-materials-and-textures).
 
 How you produce those is the same problem as any UE5.4 asset mod and is out of scope here.
 The one rule worth repeating from [04-authoring.md](04-authoring.md#gotchas): a mesh
 referencing a different skeleton than the character's rig **will load and T-pose**. Share the
-character's skeleton. Mind which one: the game ships two side by side. Scav Girl and the other
-base characters use `GenericHumanoid_Skeleton`, while Shaman uses
-`GenericHumanoid_Skeleton_MainCharacters`. A mesh on the wrong one of the pair doesn't T-pose;
-it animates *almost* right, with a stretched neck and a gun that points the wrong way, which is
-harder to spot.
+character's skeleton. Mind which one. The game ships two `GenericHumanoid` skeletons side by
+side, and Gunhead has his own. Measured from every mesh in each character's roster:
+
+| Character | Skeleton |
+|---|---|
+| `Girl`, `MaskMan`, `OldMan` | `/Game/Animations/GenericHumanoid/GenericHumanoid_Skeleton` |
+| `BagMan`, `Shaman` | `/Game/Animations/GenericHumanoid/GenericHumanoid_Skeleton_MainCharacters` |
+| `Gunhead` | `/Game/Character/Scavengers/Gunhead/SK_SCV_GHD_V01_Skeleton` |
+
+A mesh on the wrong one of the two `GenericHumanoid` skeletons doesn't T-pose. It animates
+*almost* right, with a stretched neck and a gun that points the wrong way, which is harder to
+spot. `cmsf-author` v0.3.1 and later warns when your mesh's skeleton isn't the character's.
 
 If you only want to surface a skin the game already ships but never wired up, you do not need
 to cook anything — point `skin.json` at the existing `/Game/` path and CMSF clones it.
@@ -102,7 +110,7 @@ not an error.
   "name": "Ash Runner",
   "description": "Scav Girl, kitted for the ash flats.",
   "mesh": "SK_AshRunner.uasset",
-  "icon": "T_AshRunner_Portrait.uasset"
+  "icon": "portrait.png"
 }
 ```
 
@@ -111,7 +119,7 @@ not an error.
 | `character` | yes | `BagMan` `Girl` `Gunhead` `MaskMan` `OldMan` `Shaman` |
 | `slot` | yes | two digits; `--slot` overrides it |
 | `name` | yes | shown in the selector |
-| `icon` | **yes** | see below — this is not optional in v0.2 |
+| `icon` | **yes** | an image, a cooked texture, or a `/Game/` path. See [Your portrait](#your-portrait); it is not optional |
 | `mesh` | yes | |
 | `description` | no | shown under the name |
 | `id` | no | defaults to the folder name |
@@ -119,9 +127,34 @@ not an error.
 
 `mesh` and `icon` each take **either** a `/Game/…` path, which is cloned out of your own
 installed cook, **or** a path relative to the skin folder, which is how you ship your own
-cooked assets.
+cooked assets. `icon` also takes a plain image.
+
+> A `/Game/` path means the **game's** asset, read from the game's own paks. If your model is
+> a replacer that overwrites a game path, pointing `mesh` at that path clones the original,
+> not yours. Point it at your own cooked `.uasset` instead.
+
+### Your portrait
+
+> **Image portraits need cmsf-author v0.3.1 or later**, which isn't released yet. With v0.3.0,
+> `icon` must be a cooked `.uasset` or a `/Game/` path.
+
+The easy way is an image: `"icon": "portrait.png"` (`.png`, `.jpg`, `.bmp` and `.tga` work).
+The tool bakes it into a copy of your character's own portrait texture, so it comes out as
+exactly the kind of texture the game's portraits are:
+
+- **Size: 550×950.** Any other size is scaled to cover that and centre-cropped, and the build
+  says how much was cropped. Make it 550×950 and nothing is lost.
+- **Background: white.** Every portrait in the game is the character over white. Transparent
+  areas of your image become white.
+- Uncompressed, so what you see is what ships.
+
+A cooked portrait texture (`.uasset`) still works if you'd rather make one in Unreal. So does a
+`/Game/` path to one of the game's portraits, which is handy for testing.
 
 ### Your own materials and textures
+
+> **Needs cmsf-author v0.3.1 or later**, which isn't released yet. v0.3.0 ships exactly mesh,
+> portrait and string table, and fails the build on anything else.
 
 If your mesh uses materials or textures you cooked yourself, put their cooked files in the skin
 folder and list them. Folders are taken whole:
@@ -216,8 +249,10 @@ That is the one authoring mistake that produces a clean build and a missing skin
 The build proves your portrait is **in the pak**. It cannot prove it **loads**. A corrupt or
 badly-cooked texture yields a clean build, a green verify, and an invisible skin.
 
-**If you supplied your own cooked texture rather than cloning a `/Game/` path, test in-game
-before publishing.** This is the one failure the tool cannot catch for you.
+An image portrait doesn't have this problem: it is baked into the game's own portrait
+texture, which loads by construction. So does a `/Game/` path. **If you supplied your own
+cooked portrait texture instead, test in-game before publishing.** That is the one failure the
+tool cannot catch for you.
 
 ---
 

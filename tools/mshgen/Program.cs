@@ -25,6 +25,12 @@ using UAssetAPI.Unversioned;
 //       print the /Game/ path the package says it lives at
 //   mshgen --imports <in.uasset> <usmap>
 //       print the /Game/ packages it imports, one per line
+//   mshgen --bake-portrait <image> <template.uasset>
+//       write an image over a cooked portrait texture, in place (Portrait.cs)
+//   mshgen --portrait-template <Character>
+//       print the /Game/ path of that character's portrait template
+//   mshgen --skeleton-warning <mesh.uasset> <usmap> <Character>
+//       print a warning if the mesh is bound to another skeleton than the character's
 
 try
 {
@@ -40,10 +46,28 @@ try
         foreach (var p in Identity.PackageImports(a)) Console.WriteLine(p);
         return 0;
     }
+    if (args.Length >= 3 && args[0] == "--bake-portrait")
+    {
+        Console.WriteLine(Portrait.Bake(args[1], args[2]));
+        return 0;
+    }
+    if (args.Length >= 4 && args[0] == "--skeleton-warning")
+    {
+        var w = Identity.SkeletonWarning(new UAsset(args[1], EngineVersion.VER_UE5_4, new Usmap(args[2])), args[3]);
+        if (w != null) Console.WriteLine(w);
+        return 0;
+    }
+    if (args.Length >= 2 && args[0] == "--portrait-template")
+    {
+        Console.WriteLine(Portrait.TemplateFor(args[1]));
+        return 0;
+    }
     if (args.Length < 4)
     {
         Console.Error.WriteLine("usage: mshgen <in.uasset> <usmap> <out.uasset> <NewObjectName> [--relink <map.json>]\n" +
-                                "       mshgen --package-path|--imports <in.uasset> <usmap>");
+                                "       mshgen --package-path|--imports <in.uasset> <usmap>\n" +
+                                "       mshgen --bake-portrait <image> <template.uasset>\n" +
+                                "       mshgen --portrait-template <Character>");
         return 2;
     }
 

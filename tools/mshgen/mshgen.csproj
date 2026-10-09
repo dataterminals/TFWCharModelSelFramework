@@ -8,11 +8,13 @@
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="UAssetAPI" Version="1.1.0" />
+    <PackageReference Include="StbImageSharp" Version="2.27.14" />
   </ItemGroup>
   <ItemGroup>
     <!-- Linked, not copied: the identity rule and the clone step are the same code in the
          Python reference and in cmsf-author.exe, so the two cannot drift apart. -->
     <Compile Include="..\cmsf-author\Identity.cs" Link="Identity.cs" />
     <Compile Include="..\cmsf-author\Clone.cs" Link="Clone.cs" />
+    <Compile Include="..\cmsf-author\Portrait.cs" Link="Portrait.cs" />
   </ItemGroup>
 </Project>

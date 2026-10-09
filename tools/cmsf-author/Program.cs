@@ -267,10 +267,16 @@ static class Program
 
         Console.WriteLine("==> resolving sources");
         var meshSrc = ResolveSource(meshSrcValue, skinDir, src, paks, "mesh");
-        var iconSrc = ResolveSource(iconSrcValue, skinDir, src, paks, "icon");
+        string iconSrc, iconNote = null;
+        if (Portrait.IsImage(iconSrcValue))
+            (iconSrc, iconNote) = BakePortrait(iconSrcValue, skinDir, src, build, paks, character);
+        else
+            iconSrc = ResolveSource(iconSrcValue, skinDir, src, paks, "icon");
         var extras = ResolveAssets(assetValues, skinDir, new[] { meshObj, texObj, stObj }, meshSrc, iconSrc);
         Console.WriteLine($"      mesh  {Path.GetFileName(meshSrc)}");
-        Console.WriteLine($"      icon  {Path.GetFileName(iconSrc)}");
+        Console.WriteLine(iconNote == null
+            ? $"      icon  {Path.GetFileName(iconSrc)}"
+            : $"      icon  {iconSrcValue}, baked into {Path.GetFileNameWithoutExtension(iconSrc)} ({iconNote})");
         foreach (var x in extras) Console.WriteLine($"      +     {x.Rel}");
 
         // Where every shipped package claims to live now, and where it lives in the slot. The
@@ -318,6 +324,26 @@ static class Program
         Console.WriteLine($"Install alongside the framework. This pak MUST load ABOVE it " +
                           $"(_{PakOrder}_P beats _9_P; under MO2, higher priority wins).");
         Console.WriteLine($"Expect {character} slot {slot} to show '{name}' with this portrait and mesh.");
+    }
+
+    /// <summary>
+    /// An image portrait: extract the character's base portrait from the cook, and write the
+    /// image over a copy of it. The copy lives in the build tree, never in the extraction cache,
+    /// so a later build that clones the real game portrait gets the game's pixels.
+    /// </summary>
+    static (string, string) BakePortrait(string value, string skinDir, string src, string build,
+                                         string paks, string character)
+    {
+        var image = Path.GetFullPath(Path.Combine(skinDir, value));
+        if (!File.Exists(image)) throw new BuildError($"icon: {image} does not exist");
+        var tpl = ResolveSource(Portrait.TemplateFor(character), skinDir, src, paks, "icon template");
+        var dir = Path.Combine(build, "portrait");
+        if (Directory.Exists(dir)) Directory.Delete(dir, true);
+        Directory.CreateDirectory(dir);
+        var copy = Path.Combine(dir, Path.GetFileName(tpl));
+        File.Copy(tpl, copy);
+        File.Copy(Path.ChangeExtension(tpl, ".uexp"), Path.ChangeExtension(copy, ".uexp"));
+        return (copy, Portrait.Bake(image, copy));
     }
 
     /// <summary>A /Game/ value is cloned out of the live cook; anything else is a path
@@ -464,6 +490,11 @@ static class Program
             Console.WriteLine($"    uses {gameRefs.Count} game package(s): " +
                               string.Join(", ", gameRefs.Select(g => g.Split('/').Last())));
 
+        var skel = Identity.SkeletonWarning(
+            new UAsset(Path.Combine(stage, slotDir, objects[0] + ".uasset"), EngineVersion.VER_UE5_4, mappings),
+            character);
+        if (skel != null) Console.WriteLine($"\n    WARNING  {skel}");
+
         if (problems.Count > 0)
             throw new BuildError("VERIFY FAILED:\n  " + string.Join("\n  ", problems));
     }
@@ -504,7 +535,9 @@ static class Program
           { "character": "Girl", "slot": "00", "name": "Octogirl",
             "description": "...",
             "mesh": "/Game/... .SK_X",   a cooked path to clone, OR a local .uasset
-            "icon": "/Game/... .T_X",    likewise — REQUIRED, a claim with no portrait is hidden
+            "icon": "portrait.png",      REQUIRED, a claim with no portrait is hidden. An image
+                                         (.png .jpg .bmp .tga) is fitted to the game's portrait
+                                         size; a /Game/ path or a local .uasset also works
             "assets": ["Materials", "Textures"]
                                          optional: your own cooked packages the mesh uses,
                                          files or folders; they ship inside your slot

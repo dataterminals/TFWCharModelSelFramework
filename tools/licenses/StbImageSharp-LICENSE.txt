@@ -1,0 +1,10 @@
+StbImageSharp
+https://github.com/StbSharp/StbImageSharp
+
+License: "Public Domain or MIT", as stated in the project's README (the repository carries
+no separate LICENSE file). cmsf-author uses it under the public-domain option, so no notice
+is required; this file ships anyway, as a courtesy and so every dependency compiled into
+cmsf-author.exe is accounted for.
+
+StbImageSharp is a C# port of stb_image by Sean Barrett (https://github.com/nothings/stb),
+itself available under the same public-domain-or-MIT choice.
